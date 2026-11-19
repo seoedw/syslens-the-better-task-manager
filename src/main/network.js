@@ -282,7 +282,7 @@ const isLoop = (ip) => /^127\.|^::1$|^::ffff:127\./.test(ip || '');
 const scopeOf = (ip) => (ip === '0.0.0.0' || ip === '::' || ip === '*' ? 'any' : isLoop(ip) ? 'pc' : null);
 
 // Addresses inside free text (command lines, window titles, startup commands, service paths).
-// IPv4 first, so an IPv4 address written inside an IPv6 one (::ffff:192.168.1.5) goes whole.
+// IPv4 first, so an IPv4 address written inside an IPv6 one (::ffff:192.0.2.5) goes whole.
 // A four-part version number whose parts are all 255 or less looks exactly like an IPv4
 // address and is hidden too; versions with a bigger part (most of them) are left alone.
 const OCTET = '(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)';

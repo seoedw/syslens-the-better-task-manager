@@ -513,7 +513,7 @@ function packRows(list, metaFields, dynFields, sentMap, full) {
     if (full || sentMap.get(item.key) !== sig) {
       const m = {};
       for (const f of metaFields) m[f] = item[f];
-      // Window titles can hold addresses ("192.168.1.1 - Router"): hidden with the rest.
+      // Window titles can hold addresses ("192.0.2.1 - Router"): hidden with the rest.
       if (hidden && Array.isArray(m.windows)) m.windows = m.windows.map(scrubText);
       meta[item.key] = m;
     }

@@ -1,14 +1,14 @@
 'use strict';
 // SysLens backend. Samples the system, serves the UI on 127.0.0.1 behind a per-run token,
 // streams live data to it, and opens it in an app window (Edge/Chrome --app mode).
+// launcher.js normally starts this and restarts it if it ever crashes or hangs.
 //
-//   node src/main/server.js               normal start (reuses a running instance)
-//   node src/main/server.js --no-window   print the URL instead of opening a window (dev)
-//   --debug                               log to the console
+//   node src/main/launcher.js             normal start (reuses a running instance)
+//   node src/main/server.js --no-window   server only; prints the URL instead of opening a window (dev)
+//   --debug                               also log to the console (the log file is always written)
 
 const http = require('http');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { execFile } = require('child_process');
@@ -17,6 +17,7 @@ const { loadSystemInfo } = require('./sysinfo');
 const { StorageService } = require('./storage');
 const { iconDataUrl } = require('./icons');
 const shellx = require('./shell');
+const { createLogger, DATA_DIR } = require('./log');
 const pkg = require('../../package.json');
 
 function parseArgs(list) {
@@ -31,10 +32,10 @@ function parseArgs(list) {
 const argv = parseArgs(process.argv.slice(2));
 const RENDERER = path.join(__dirname, '..', 'renderer');
 const ASSETS = path.join(__dirname, '..', '..', 'assets');
-const DATA_DIR = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'SysLens');
 const INSTANCE_FILE = path.join(DATA_DIR, 'instance.json');
 const PROFILE_DIR = path.join(DATA_DIR, 'browser');
 const DEV = !!(argv['no-window'] || argv['keep-alive']);
+const SUPERVISED = typeof process.send === 'function';
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -44,21 +45,44 @@ const MIME = {
   '.svg': 'image/svg+xml',
 };
 
-const log = (...a) => {
-  if (argv.debug || DEV) console.log('[syslens]', ...a);
-};
+// The server never quits just because the live stream dropped (sleep, a network change, a busy
+// PC): the window reconnects on its own. It quits once the window itself is gone.
+const LIFECYCLE_TICK = 2000;
+const CLOSED_GRACE = 3000; // window's browser process gone and nobody connected
+const STARTUP_GRACE = 30000; // a window that was just opened may take this long to show up
+const BYE_GRACE = 60000; // the page said goodbye (closed or reloaded) and nothing came back
+const TAB_IDLE_LIMIT = 10 * 60 * 1000; // a plain browser tab can't be watched, so allow this long
+const KEEPALIVE_MS = 10000; // the page treats 30 s of silence as a dead connection
+const MAX_BUFFERED = 8 * 1024 * 1024; // a page this far behind has stopped reading; drop it
+
+const log = createLogger('server', { echo: !!(argv.debug || DEV) });
+const lastLogged = new Map();
+/** Log a recurring problem at most once a minute. */
+function logOften(key, ...parts) {
+  const now = Date.now();
+  if (now - (lastLogged.get(key) || 0) < 60000) return;
+  lastLogged.set(key, now);
+  log(...parts);
+}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const token = crypto.randomBytes(24).toString('base64url');
+// After a crash the launcher hands the old token back, so the open window can reconnect with it.
+const inherited = process.env.SYSLENS_TOKEN;
+delete process.env.SYSLENS_TOKEN; // keep it out of the browser's and PowerShell's environment
+const token = inherited && /^[A-Za-z0-9_-]{20,64}$/.test(inherited) ? inherited : crypto.randomBytes(24).toString('base64url');
+
 let port = 0;
 let server = null;
 let monitor = null;
 let storage = null;
 let HANDLERS = {};
-const clients = new Set();
+const clients = new Map(); // event-stream response -> { page, needsFull, leaving }
 let everConnected = false;
-let browserAlive = false;
-let idleTimer = null;
+let lastClientAt = Date.now();
+let lastTickAt = Date.now();
+let byeAt = 0;
+let windowMode = 'none'; // 'app' (own browser profile, can be watched), 'tab' (default browser), 'none' (dev)
+let windowOpenedAt = Date.now();
 let shuttingDown = false;
 
 // ---------- helpers ----------
@@ -72,6 +96,11 @@ function tokenOk(req) {
   const got = Buffer.from(String(req.headers['x-syslens-token'] || ''));
   const want = Buffer.from(token);
   return got.length === want.length && crypto.timingSafeEqual(got, want);
+}
+
+function pageId(req) {
+  const id = String(req.headers['x-syslens-page'] || '');
+  return /^[\w-]{8,64}$/.test(id) ? id : '';
 }
 
 function send(res, status, body, type = 'application/json; charset=utf-8') {
@@ -103,10 +132,27 @@ function readBody(req, limit = 1 << 20) {
   });
 }
 
+function notifyLauncher(msg) {
+  if (!SUPERVISED || !process.connected) return;
+  process.send(msg, () => {}); // errors (launcher gone) are ignored
+}
+
+const sse = (event, data) => `event: ${event}\ndata: ${JSON.stringify(data, round)}\n\n`;
+
+function writeTo(res, chunk) {
+  if (res.destroyed || res.writableEnded) return;
+  if (res.writableLength > MAX_BUFFERED) {
+    logOften('stalled', 'a window stopped reading the live stream; dropping it so it reconnects');
+    res.destroy();
+    return;
+  }
+  res.write(chunk);
+}
+
 function broadcast(event, data) {
   if (!clients.size) return;
-  const payload = `event: ${event}\ndata: ${JSON.stringify(data, round)}\n\n`;
-  for (const res of clients) res.write(payload);
+  const payload = sse(event, data);
+  for (const res of clients.keys()) writeTo(res, payload);
 }
 
 // ---------- compact snapshot stream ----------
@@ -162,7 +208,18 @@ function broadcastSnapshot(s) {
   }
   const { out, next } = packSnapshot(s, false);
   sentMeta = next;
-  broadcast('snapshot', out);
+  const delta = sse('snapshot', out);
+  let full = null;
+  for (const [res, c] of clients) {
+    if (c.needsFull) {
+      // Connected before there was anything to send: it needs the whole picture first.
+      if (!full) full = sse('snapshot', packSnapshot(s, true).out);
+      c.needsFull = false;
+      writeTo(res, full);
+    } else {
+      writeTo(res, delta);
+    }
+  }
 }
 
 // ---------- API ----------
@@ -225,7 +282,7 @@ async function handleCall(req, res) {
     const result = await HANDLERS[channel](...(Array.isArray(msg.args) ? msg.args : []));
     send(res, 200, JSON.stringify(result === undefined ? null : result, round));
   } catch (err) {
-    log('call failed', channel, err);
+    logOften(`call:${channel}`, `${channel} failed:`, err);
     send(res, 500, JSON.stringify({ error: String((err && err.message) || err) }));
   }
 }
@@ -238,15 +295,33 @@ function openEvents(req, res) {
     'X-Content-Type-Options': 'nosniff',
   });
   res.write(': connected\n\n');
-  if (monitor.latest) res.write(`event: snapshot\ndata: ${JSON.stringify(packSnapshot(monitor.latest, true).out, round)}\n\n`);
-  clients.add(res);
-  clientsChanged();
-  const keepAlive = setInterval(() => res.write(': ka\n\n'), 15000);
-  req.on('close', () => {
+  const c = { page: pageId(req), needsFull: !monitor.latest, leaving: false };
+  if (monitor.latest) res.write(sse('snapshot', packSnapshot(monitor.latest, true).out));
+  clients.set(res, c);
+  byeAt = 0;
+  clientsChanged(everConnected ? 'window reconnected' : 'window connected');
+  const keepAlive = setInterval(() => writeTo(res, ': ka\n\n'), KEEPALIVE_MS);
+  res.on('close', () => {
     clearInterval(keepAlive);
-    clients.delete(res);
-    clientsChanged();
+    if (!clients.delete(res)) return;
+    if (c.leaving && !clients.size) byeAt = Date.now();
+    clientsChanged(c.leaving ? 'window closed or reloading' : 'live connection dropped');
   });
+}
+
+/** The page is closing or reloading: remember that, so it isn't mistaken for a lost connection. */
+function handleBye(req, res) {
+  const page = pageId(req);
+  let found = false;
+  for (const c of clients.values()) {
+    if (page && c.page === page) {
+      c.leaving = true;
+      found = true;
+    }
+  }
+  // Its stream may already have closed.
+  if (!found && !clients.size) byeAt = Date.now();
+  send(res, 200, '{"ok":true}');
 }
 
 /** The elevated instance announces its token here; we pass it to the page and step aside. */
@@ -300,6 +375,7 @@ async function onRequest(req, res) {
     if (p === '/api/ping') return send(res, 200, '{"ok":true}');
     if (p === '/api/events' && req.method === 'GET') return openEvents(req, res);
     if (p === '/api/call' && req.method === 'POST') return handleCall(req, res);
+    if (p === '/api/bye' && req.method === 'POST') return handleBye(req, res);
     if (p === '/api/handoff' && req.method === 'POST') return handleHandoff(req, res);
     return send(res, 404, '{"error":"Not found"}');
   }
@@ -308,31 +384,44 @@ async function onRequest(req, res) {
 }
 
 // ---------- lifecycle ----------
-function clientsChanged() {
+function clientsChanged(why) {
   monitor.setBackground(clients.size === 0);
-  if (clients.size) {
-    everConnected = true;
-    clearTimeout(idleTimer);
-    idleTimer = null;
-    return;
-  }
-  if (DEV || shuttingDown) return;
-  clearTimeout(idleTimer);
-  // A reload reconnects within a second; a closed window never does.
-  idleTimer = setTimeout(() => {
-    if (!clients.size) shutdown('window closed');
-  }, browserAlive ? 45000 : 8000);
+  log(`${why} (${clients.size} connected)`);
+  if (clients.size) everConnected = true;
+  else lastClientAt = Date.now();
 }
 
-function watchBrowser(child) {
-  if (!child) return;
-  browserAlive = true;
-  child.on('exit', () => {
-    browserAlive = false;
-    setTimeout(() => {
-      if (!clients.size && !DEV) shutdown('window closed');
-    }, everConnected ? 2500 : 20000);
-  });
+/** Is the SysLens window (its browser process, found by its dedicated profile) still open? */
+function appWindowRunning() {
+  for (const pid of monitor.procs.selfBrowsers) {
+    try {
+      process.kill(pid, 0); // existence check only
+      return true;
+    } catch (err) {
+      if (err.code === 'EPERM') return true;
+    }
+  }
+  return false;
+}
+
+function lifecycleTick() {
+  const now = Date.now();
+  // A long gap between ticks means the PC was asleep. Nothing could reconnect while it slept,
+  // so start counting again rather than treating the window as gone.
+  if (now - lastTickAt > LIFECYCLE_TICK * 5 && !clients.size) lastClientAt = now;
+  lastTickAt = now;
+  if (shuttingDown || windowMode === 'none' || clients.size) return;
+  const idle = now - lastClientAt;
+  if (windowMode === 'app') {
+    if (byeAt && now - byeAt > BYE_GRACE) return shutdown('the window was closed');
+    if (appWindowRunning()) return; // still open: it reconnects, however long that takes
+    if (!everConnected && now - windowOpenedAt < STARTUP_GRACE) return;
+    if (idle > CLOSED_GRACE) shutdown(everConnected ? 'the window was closed' : 'the window never opened');
+    return;
+  }
+  // A plain browser tab can't be watched: go by its goodbye, or a long idle limit.
+  if (byeAt && now - byeAt > 10000) return shutdown('the browser tab was closed');
+  if (everConnected ? idle > TAB_IDLE_LIMIT : now - windowOpenedAt > 90000) shutdown('no browser tab is connected');
 }
 
 function shutdown(reason) {
@@ -345,7 +434,7 @@ function shutdown(reason) {
   } catch {
     /* ignore */
   }
-  for (const res of clients) {
+  for (const res of clients.keys()) {
     try {
       res.end();
     } catch {
@@ -392,7 +481,7 @@ async function attachToExisting() {
 function elevate() {
   if (monitor.admin) return { ok: true };
   const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
-  const args = `"${path.join(__dirname, 'server.js')}" --adopt=${port} --parent-token=${token}`;
+  const args = `"${path.join(__dirname, 'launcher.js')}" --adopt=${port} --parent-token=${token}`;
   const command = `Start-Process -FilePath ${q(process.execPath)} -ArgumentList ${q(args)} -Verb RunAs -WindowStyle Hidden`;
   return new Promise((resolve) => {
     execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { windowsHide: true }, (err) => {
@@ -430,28 +519,32 @@ async function listenWithRetry(p, ms) {
 }
 
 async function main() {
-  if (!argv.adopt && !DEV && !argv.new && (await attachToExisting())) {
-    log('opened a window on the running instance');
+  const restarted = !!argv.restarted;
+  if (!restarted && !argv.adopt && !DEV && !argv.new && (await attachToExisting())) {
+    log('already running; opened another window on it');
     return process.exit(0);
   }
+  log(`starting SysLens ${pkg.version}${restarted ? ' again after a crash' : ''}${argv.adopt ? ' as administrator' : ''}`);
 
   monitor = new Monitor();
+  if (SUPERVISED) monitor.procs.selfPids.add(process.ppid); // the launcher belongs to SysLens too
   storage = new StorageService();
   HANDLERS = buildHandlers();
-  loadSystemInfo((info) => monitor.setSystemInfo(info)).catch(() => {});
+  loadSystemInfo((info) => monitor.setSystemInfo(info)).catch((err) => log('could not read system info:', err));
   monitor.on('snapshot', (s) => broadcastSnapshot(s));
-  monitor.on('error', (err) => log('monitor error', err));
+  monitor.on('error', (err) => logOften(`monitor:${err && err.message}`, 'sampling failed:', err));
   storage.on('progress', (m) => broadcast('storage:progress', m));
   storage.on('done', (m) => broadcast('storage:done', m));
   storage.on('apps', (m) => broadcast('storage:apps', m));
   storage.on('hogs', (m) => broadcast('storage:hogs', m));
-  storage.on('error', (err) => log('storage error', err));
+  storage.on('error', (err) => logOften(`storage:${err && err.message}`, 'storage failed:', err));
 
   server = http.createServer((req, res) => {
     onRequest(req, res).catch((err) => send(res, 500, JSON.stringify({ error: String(err) })));
   });
   server.requestTimeout = 0;
 
+  let reusedPort = false;
   if (argv.adopt) {
     const target = Number(argv.adopt);
     try {
@@ -465,27 +558,49 @@ async function main() {
       /* the old instance may already be gone */
     }
     port = await listenWithRetry(target, 20000);
+  } else if (restarted && Number(argv.port)) {
+    try {
+      port = await listenWithRetry(Number(argv.port), 10000);
+      reusedPort = true;
+    } catch (err) {
+      log(`port ${argv.port} is no longer free (${err.code}); opening a new window`);
+      port = await listenWithRetry(0, 0);
+    }
   } else {
     port = await listenWithRetry(Number(argv.port) || 0, 0);
   }
 
-  writeInstance();
+  if (!DEV) writeInstance();
+  notifyLauncher({ type: 'ready', port, token });
+  if (SUPERVISED) {
+    setInterval(() => notifyLauncher({ type: 'beat' }), 5000);
+    process.on('message', (m) => {
+      if (m && m.type === 'stop') shutdown('stopped');
+    });
+    process.on('disconnect', () => log('the launcher went away; carrying on without it'));
+  }
+
   monitor.start();
+  windowMode = DEV ? 'none' : shellx.findBrowser() ? 'app' : 'tab';
   const url = appUrl(port, token);
   if (argv['no-window']) console.log(`SysLens is running at ${url}`);
-  else if (!argv.adopt) watchBrowser(shellx.openAppWindow(url, PROFILE_DIR));
-  log(`listening on 127.0.0.1:${port}${monitor.admin ? ' (administrator)' : ''}`);
-
-  if (!DEV) {
-    setTimeout(() => {
-      if (!everConnected) shutdown('no window ever connected');
-    }, 90000).unref();
-  }
+  // After a crash the old window is still open, and it reconnects by itself.
+  else if (!argv.adopt && !reusedPort) shellx.openAppWindow(url, PROFILE_DIR);
+  windowOpenedAt = Date.now();
+  lastClientAt = Date.now();
+  setInterval(lifecycleTick, LIFECYCLE_TICK);
+  log(`listening on 127.0.0.1:${port}${monitor.admin ? ' as administrator' : ''}`);
 }
 
 process.on('SIGINT', () => shutdown('interrupted'));
 process.on('SIGTERM', () => shutdown('terminated'));
+process.on('uncaughtException', (err) => {
+  log('crashed:', err);
+  process.exit(1); // the launcher starts a fresh server and the window reconnects to it
+});
+process.on('unhandledRejection', (err) => logOften(`rejection:${err && err.message}`, 'unhandled promise rejection:', err));
 main().catch((err) => {
+  log('could not start:', err);
   console.error(err);
   process.exit(1);
 });

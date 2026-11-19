@@ -54,13 +54,15 @@ npm start
 
 SysLens opens in its own window. Close the window and SysLens exits.
 
-To start it without a terminal, double-click **`SysLens.cmd`**, or add a Start menu shortcut:
+To open it like any other app, add shortcuts on the desktop and in the Start menu:
 
 ```bash
 npm run shortcut
 ```
 
-(`powershell -File scripts\install-shortcut.ps1 -Desktop` also puts one on the desktop.)
+Clone it somewhere permanent first (Documents is fine), because the shortcuts point into that folder. Double-clicking **`SysLens.cmd`** also works.
+
+**If the connection drops.** The window reconnects by itself. It tries again after 1, 2 and 3 seconds, then every 5 seconds, even while minimized, and shows a **Retry now** button. Sleep, a network change or a busy PC no longer stops SysLens. The server keeps running for as long as its window is open, and a small launcher restarts the server if it ever crashes, on the same address, so the window picks up where it left off. What happened is written to `%LOCALAPPDATA%\SysLens\syslens.log`.
 
 **Administrator mode.** Without admin rights, Windows hides some details: the paths and command lines of system services, and a few protected folders. Click **Run as administrator** in the sidebar and the same window reconnects with full access.
 
@@ -90,7 +92,9 @@ The backend is plain Node.js. It serves the UI on `127.0.0.1` and opens it in an
 
 ```
 src/main/        backend (Node.js)
+  launcher.js      starts the server and restarts it if it crashes or hangs
   server.js        HTTP server, live event stream, window and lifecycle
+  log.js           the log file
   monitor.js       sampling loop, history, memory accounting
   processes.js     process table, grouping, details, end task
   pdh.js           performance counters

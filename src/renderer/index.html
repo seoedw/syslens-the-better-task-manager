@@ -87,7 +87,13 @@
     <div class="tooltip" id="tooltip"></div>
     <div id="modalRoot"></div>
     <div class="toasts" id="toasts"></div>
-    <div class="offline" id="offline">Reconnecting to SysLens…</div>
+    <div class="offline" id="offline" role="status" aria-live="polite">
+      <div class="offline-msg">
+        <span id="offlineText">Connection lost. Reconnecting…</span>
+        <span class="offline-hint" id="offlineHint" hidden></span>
+      </div>
+      <button type="button" class="offline-btn" id="offlineRetry">Retry now</button>
+    </div>
     <script src="js/bridge.js"></script>
     <script src="js/util.js"></script>
     <script src="js/charts.js"></script>

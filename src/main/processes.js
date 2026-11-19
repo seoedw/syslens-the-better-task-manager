@@ -77,6 +77,8 @@ class ProcessMonitor {
     this.windows = new Map();
     this.windowsAt = 0;
     this.current = new Map(); // pid -> process record (latest sample)
+    this.selfPids = new Set([process.pid]); // SysLens's own Node processes (server, launcher)
+    this.selfBrowsers = []; // pids of the app window's main browser process (not its helpers)
   }
 
   queryRaw() {
@@ -225,6 +227,7 @@ class ProcessMonitor {
     this.sampled = true;
     this.current = new Map();
     this.createTimes = createTimes;
+    const selfBrowsers = [];
     for (const p of list) {
       let m = this.meta.get(p.key);
       if (!m) {
@@ -251,13 +254,22 @@ class ProcessMonitor {
       p.windows = this.windows.get(p.pid) || null;
       p.isWindows = !!special || (m.path ? m.path.toLowerCase().startsWith(WINDOWS_DIR) : false);
       p.critical = CRITICAL.has(lower);
-      // SysLens itself: this Node process and its app window's browser processes.
-      p.isSelf = p.pid === process.pid || (!!m.cmd && m.cmd.toLowerCase().includes(SELF_PROFILE_MARK));
+      // SysLens itself: its Node processes and its app window's browser processes.
+      const ownBrowser = !!m.cmd && m.cmd.toLowerCase().includes(SELF_PROFILE_MARK);
+      p.isSelf = this.selfPids.has(p.pid) || ownBrowser;
+      if (ownBrowser && !m.cmd.includes('--type=')) selfBrowsers.push(p.pid);
       const g = gpu.get(p.pid);
       p.gpu = g ? g.util : 0;
       p.gpuShared = g ? g.shared : 0;
       p.gpuDedicated = g ? g.dedicated : 0;
       this.current.set(p.pid, p);
+    }
+    this.selfBrowsers = selfBrowsers;
+    // The headless console host that runs SysLens's Node processes is part of SysLens too.
+    for (const pid of this.selfPids) {
+      const p = this.current.get(pid);
+      const host = p && this.current.get(p.ppid);
+      if (host && host.exe === 'conhost.exe' && this.isParent(host.pid, p.pid)) host.isSelf = true;
     }
 
     for (const p of list) p.group = this.groupKey(p);

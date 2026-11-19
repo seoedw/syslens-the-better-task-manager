@@ -76,19 +76,69 @@ const App = (() => {
     if (meta) meta.content = effective === 'dark' ? '#0c0f13' : '#f3f4f6';
   }
 
-  let offlineTimer = null;
-  function onConnection(up) {
-    const banner = U.$('#offline');
-    clearTimeout(offlineTimer);
-    if (up) banner.classList.remove('show');
-    else offlineTimer = setTimeout(() => banner.classList.add('show'), 1200);
+  // ---- connection banner ----
+  // Appears when the live connection drops and counts down to the next retry (bridge.js retries
+  // every few seconds on its own). After 20 s it also says what to do if SysLens was closed.
+  let offlineSince = 0;
+  let retryAt = 0;
+  let showTimer = null;
+  let tickTimer = null;
+  let linkLost = false; // the server doesn't accept this window's token any more
+  let handingOff = false; // switching to the administrator instance
+
+  function renderOffline() {
+    const text = U.$('#offlineText');
+    const hint = U.$('#offlineHint');
+    if (linkLost) {
+      text.textContent = 'This window is no longer linked to SysLens.';
+      hint.textContent = 'Close it and open SysLens again from the desktop or Start menu.';
+      hint.hidden = false;
+      return;
+    }
+    const secs = retryAt ? Math.max(1, Math.ceil((retryAt - Date.now()) / 1000)) : 0;
+    const long = Date.now() - offlineSince > 20000;
+    const head = handingOff ? 'Switching to administrator mode.' : long ? 'SysLens isn’t responding.' : 'Connection lost.';
+    text.textContent = `${head} ${secs ? `Retrying in ${secs}s…` : 'Reconnecting…'}`;
+    hint.textContent = 'If SysLens was closed, open it again from the desktop or Start menu.';
+    hint.hidden = !long;
   }
 
+  function onConnection(up) {
+    const banner = U.$('#offline');
+    clearTimeout(showTimer);
+    clearInterval(tickTimer);
+    if (up) {
+      banner.classList.remove('show');
+      if (offlineSince) {
+        // The server may have restarted with its defaults: re-apply this window's settings.
+        syslens.setVisible(!document.hidden).catch(() => {});
+        syslens.setInterval(speed).catch(() => {});
+        if (handingOff) U.toast('Reconnected as administrator.', 'good');
+        else if (Date.now() - offlineSince > 3000) U.toast('Reconnected to SysLens.', 'good', 2500);
+      }
+      offlineSince = 0;
+      linkLost = false;
+      handingOff = false;
+      return;
+    }
+    offlineSince = Date.now();
+    renderOffline();
+    tickTimer = setInterval(renderOffline, 1000);
+    showTimer = setTimeout(() => banner.classList.add('show'), 1200);
+  }
+
+  function onRetry({ at }) {
+    retryAt = at;
+    if (offlineSince) renderOffline();
+  }
+
+  let speed = 1000;
   function setSpeedUi(ms) {
     U.$$('#speed button').forEach((b) => b.classList.toggle('on', Number(b.dataset.ms) === ms));
   }
 
   async function setSpeed(ms) {
+    speed = ms;
     await syslens.setInterval(ms);
     setSpeedUi(ms);
     store.set('interval', String(ms));
@@ -144,13 +194,16 @@ const App = (() => {
       if (api.snap && views[api.current]) views[api.current].render(api.snap);
     });
     syslens.onConnection(onConnection);
+    syslens.onRetry(onRetry);
+    U.$('#offlineRetry').addEventListener('click', () => syslens.reconnect());
     syslens.onAuthFailed(() => {
-      U.$('#offline').textContent = 'This page has to be opened by SysLens itself — start SysLens from its shortcut.';
+      linkLost = true;
+      renderOffline();
       U.$('#offline').classList.add('show');
     });
     syslens.onHandoff(() => {
       adminShown = null;
-      U.toast('Reconnected as administrator.', 'good');
+      handingOff = true;
     });
     document.addEventListener('visibilitychange', () => {
       syslens.setVisible(!document.hidden).catch(() => {});

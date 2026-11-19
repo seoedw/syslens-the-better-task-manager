@@ -293,12 +293,17 @@ button {
   position: fixed;
   left: 50%;
   top: 12px;
-  transform: translate(-50%, -80px);
+  transform: translate(-50%, calc(-100% - 24px));
   z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: max-content;
+  max-width: min(640px, calc(100vw - 32px));
   background: var(--warn);
   color: #1b1405;
   font-weight: 600;
-  padding: 8px 16px;
+  padding: 7px 7px 7px 16px;
   border-radius: 20px;
   box-shadow: var(--shadow);
   transition: transform 0.25s ease;
@@ -307,6 +312,41 @@ button {
 
 .offline.show {
   transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+
+.offline-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.offline-hint {
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.offline-btn {
+  flex: none;
+  border: 0;
+  border-radius: 14px;
+  padding: 5px 12px;
+  background: rgba(27, 20, 5, 0.14);
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.offline-btn:hover {
+  background: rgba(27, 20, 5, 0.24);
+}
+
+.offline-btn:focus-visible {
+  outline: 2px solid #1b1405;
+  outline-offset: 1px;
 }
 
 .topbar h1 {

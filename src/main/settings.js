@@ -89,11 +89,16 @@ function clean(input) {
 class Settings {
   constructor() {
     this.values = { ...DEFAULTS };
+    let existed = false;
     try {
       Object.assign(this.values, clean(JSON.parse(fs.readFileSync(FILE, 'utf8'))));
+      existed = true;
     } catch {
       /* first run, or a damaged file: defaults */
     }
+    // No settings yet but a window profile from before: an upgrade from 1.2 or earlier, so the
+    // window says what's new rather than welcoming a new user.
+    if (!existed && fs.existsSync(path.join(DATA_DIR, 'browser'))) this.values.lastVersion = '1.2';
     // Pages added in a later version go to the end of a saved order.
     const order = this.values.navOrder.filter((p) => PAGES.includes(p));
     for (const p of PAGES) if (!order.includes(p)) order.push(p);

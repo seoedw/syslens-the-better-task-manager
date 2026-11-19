@@ -199,13 +199,16 @@ function findBrowser() {
 // to ~115 MB. Software rendering, run inside the browser process, replaces a GPU process that
 // held ~170 MB (the UI is light enough for the CPU); the network service runs in the browser
 // process too; Edge's built-in extensions, spare renderer and background update checks are left
-// out; and the page's JavaScript heap is kept small (renderer ~93 MB -> ~50 MB). They only
-// apply when the window's browser process starts.
+// out; the page's JavaScript heap is kept small (renderer ~93 MB -> ~54 MB), and so are the
+// drawing caches (another ~6 MB; the UI uses two fonts and small icons). They only apply when
+// the window's browser process starts.
 const LEAN_FLAGS = [
   '--disable-gpu',
   '--in-process-gpu',
   '--enable-features=NetworkServiceInProcess2',
   '--js-flags=--optimize-for-size --max-semi-space-size=1',
+  '--skia-font-cache-limit-mb=4',
+  '--skia-resource-cache-limit-mb=8',
   '--disable-extensions',
   '--disable-component-extensions-with-background-pages',
   '--disable-background-networking',

@@ -262,8 +262,10 @@ const Processes = (() => {
 
   function childRow(p) {
     const k = `p:${p.pid}`;
-    const label = p.role || (p.windows && p.windows[0]) || p.display;
-    return `<tr data-k="${k}" class="child ${isSel(k) ? 'sel' : ''}"><td><div class="namecell"><span class="nm">${U.esc(label)}</span><span class="role">PID ${p.pid}</span></div></td>${cells(p)}</tr>`;
+    // A window title can name a document or web page: "Hide personal info" blurs it.
+    const title = !p.role && p.windows && p.windows[0];
+    const label = p.role || title || p.display;
+    return `<tr data-k="${k}" class="child ${isSel(k) ? 'sel' : ''}"><td><div class="namecell"><span class="nm${title ? ' pii' : ''}">${U.esc(label)}</span><span class="role">PID ${p.pid}</span></div></td>${cells(p)}</tr>`;
   }
 
   function flatRow(p, depth = null, hasKids = false, open = true) {
@@ -271,9 +273,10 @@ const Processes = (() => {
     const fallback = p.isWindows ? U.WIN_ICON : undefined;
     const indent = depth == null ? '' : `style="padding-left:${10 + depth * 18}px"`;
     const caret = depth == null ? '' : `<span class="caret ${hasKids ? (open ? 'open' : '') : 'none'}" data-toggle="t:${p.pid}">▶</span>`;
-    const sub = p.role || (p.windows && p.windows[0]) || '';
+    const title = !p.role && p.windows && p.windows[0];
+    const sub = p.role || title || '';
     return `<tr data-k="${k}" ${hasKids ? `data-t="t:${p.pid}"` : ''} class="${isSel(k) ? 'sel' : ''}"><td ${indent}><div class="namecell">${caret}${U.icon(p.path, fallback)}<span class="nm">${U.esc(p.display)}</span>${
-      sub ? `<span class="role">${U.esc(sub)}</span>` : ''
+      sub ? `<span class="role${title ? ' pii' : ''}">${U.esc(sub)}</span>` : ''
     }</div></td>${cells(p)}</tr>`;
   }
 

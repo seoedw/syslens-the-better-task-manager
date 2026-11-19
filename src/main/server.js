@@ -395,6 +395,31 @@ function readChangelog() {
   }
 }
 
+// Lists read for a page (event logs, the hardware report, services, startup entries, adapters)
+// are dropped after 10 minutes without a request; they're read again when next needed.
+const lastUsed = {};
+const touch = (key, value) => {
+  lastUsed[key] = Date.now();
+  return value;
+};
+function sweepCaches() {
+  const idle = (key) => Date.now() - (lastUsed[key] || 0) > 10 * 60000;
+  if (idle('history')) history.cache = null;
+  if (idle('machine') && !machine.loading.hardware && !machine.loading.windows) {
+    machine.hardware = null;
+    machine.windows = null;
+  }
+  if (idle('services')) {
+    services.cache = null;
+    services.at = 0;
+  }
+  if (idle('startup')) startup.cache = null;
+  if (idle('adapters')) {
+    network.adapters = null;
+    network.adaptersAt = 0;
+  }
+}
+
 function buildHandlers() {
   return {
     snapshot: () => monitor.latest,
@@ -434,16 +459,16 @@ function buildHandlers() {
     'settings:set': (patch) => settings.set(patch),
     'settings:reset': () => settings.reset(),
     'settings:background': (dataUrl) => settings.setBackgroundImage(dataUrl),
-    'machine:get': (refresh) => machine.get(!!refresh),
+    'machine:get': (refresh) => touch('machine', machine.get(!!refresh)),
     'net:connections': (opts) =>
       network.connections({ pid: opts && Number.isInteger(opts.pid) ? opts.pid : null, resolve: settings.get('resolveHosts') && !(opts && opts.resolve === false) }),
-    'net:adapters': (refresh) => network.adapterInfo(!!refresh),
-    'services:list': (refresh) => services.list(!!refresh),
-    'svc:control': (name, action) => services.control(name, action),
-    'svc:startType': (name, type) => services.setStartType(name, type),
-    'startup:list': (refresh) => startup.list(!!refresh),
-    'startup:toggle': (id, on) => startup.setEnabled(id, !!on),
-    'history:get': (refresh) => history.get(!!refresh),
+    'net:adapters': (refresh) => touch('adapters', network.adapterInfo(!!refresh)),
+    'services:list': (refresh) => touch('services', services.list(!!refresh)),
+    'svc:control': (name, action) => touch('services', services.control(name, action)),
+    'svc:startType': (name, type) => touch('services', services.setStartType(name, type)),
+    'startup:list': (refresh) => touch('startup', startup.list(!!refresh)),
+    'startup:toggle': (id, on) => touch('startup', startup.setEnabled(id, !!on)),
+    'history:get': (refresh) => touch('history', history.get(!!refresh)),
     'proc:details': (pid) => (Number.isInteger(pid) ? monitor.procs.details(pid) : null),
     'proc:kill': (targets) => monitor.procs.kill(cleanTargets(targets)),
     'proc:killTree': (targets) => monitor.procs.killTree(cleanTargets(targets)),
@@ -821,6 +846,7 @@ async function main() {
   lastClientAt = Date.now();
   setInterval(lifecycleTick, LIFECYCLE_TICK);
   setInterval(latencyTick, 5000);
+  setInterval(sweepCaches, 60000);
   if (settings.get('startWithWindows') && !DEV) shellx.setAutostart(true).catch(() => {}); // keeps the path current if SysLens moved
   log(`listening on 127.0.0.1:${port}${monitor.admin ? ' as administrator' : ''}`);
 }

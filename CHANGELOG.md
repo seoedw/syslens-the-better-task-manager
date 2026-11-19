@@ -25,12 +25,14 @@ updates (Settings › About › What’s new shows it again).
 
 - New default page order: Overview, Performance, Processes, Memory, Network, Storage, Startup apps, Services, History, System.
 - A compact layout by default, with tighter rows and spacing (Comfortable brings back the roomier one). Services use one line per service.
-- The SysLens window uses about 40% less memory: its JavaScript heap is kept small and its graphics and networking run inside the browser process. Pages you leave give back their tables and chart buffers.
+- The SysLens window uses less memory: its JavaScript heap and drawing caches are kept small and its graphics and networking run inside the browser process. Pages you leave give back their tables and chart buffers, and lists read for a page (event logs, the hardware report, services, startup entries) are let go after 10 minutes without use.
 - Settings are kept by SysLens itself (`%LOCALAPPDATA%\SysLens\settings.json`), so they survive restarts and carry over to the administrator window.
 
 ### Fixed
 
 - The search box’s text no longer runs under “Ctrl K”.
+- **Hide personal info** now also covers window titles shown in the process list and folder paths in Settings › About.
+- Host names are remembered for the 2,000 most recent addresses instead of piling up for as long as SysLens runs.
 
 ### Security
 

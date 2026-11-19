@@ -119,7 +119,16 @@ class NetworkService {
   }
 
   resolveLater(ip) {
-    if (this.names.has(ip) || this.names.size > 5000) return;
+    if (this.names.has(ip)) return;
+    if (this.names.size >= 2000) {
+      // Forget the oldest names instead of growing forever (or no longer resolving new ones).
+      let n = 0;
+      for (const [k, v] of this.names) {
+        if (v === null) continue; // still being looked up
+        this.names.delete(k);
+        if (++n >= 500) break;
+      }
+    }
     this.names.set(ip, null);
     this.queue.push(ip);
     this.pump();

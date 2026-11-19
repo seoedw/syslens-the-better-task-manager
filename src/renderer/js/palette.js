@@ -1,5 +1,5 @@
 'use strict';
-/* global U, App, syslens, ServicesView, StartupView */
+/* global U, App, syslens, ServicesView, StartupView, Actions */
 
 // Ctrl+K: one search box for pages, running apps, services, startup entries and actions.
 const Palette = (() => {
@@ -18,18 +18,32 @@ const Palette = (() => {
     ['services', 'Services', 'Windows services and who made them'],
     ['history', 'History', 'start-ups, sleep, crashes and updates this week'],
     ['system', 'System', 'hardware, Windows, battery health and security'],
+    ['settings', 'Settings', 'theme, colors, background, page order, shortcut and more'],
   ];
 
   function actions() {
     const s = App.snap || {};
+    const set = App.settings || {};
     const list = [
+      ['Run new task', 'start open program command run cmd ctrl+n', () => Actions.runTask()],
+      ['Restart Windows Explorer', 'taskbar start menu frozen desktop explorer', () => Actions.restartExplorer()],
+      ['Copy a system report', 'clipboard share help summary specs', () => Actions.copyReport()],
+      ['Keyboard shortcuts', 'help keys hotkeys', () => Actions.shortcuts()],
+      ['What’s new in this version', 'changelog updates release notes', () => Actions.changelog(App.info && App.info.version)],
+      ['Use the black theme (OLED)', 'theme appearance dark amoled black', () => App.setTheme('black')],
+      [set.alwaysOnTop ? 'Stop keeping SysLens on top' : 'Keep SysLens on top of other windows', 'always on top pin window', () => App.saveSettings({ alwaysOnTop: !set.alwaysOnTop })],
+      ['Customize pages and their order', 'sidebar reorder hide pages tabs', () => App.go('settings', { section: 'pages' })],
+      ['Change the background', 'wallpaper picture image appearance', () => App.go('settings', { section: 'appearance' })],
+      [set.latency ? 'Stop measuring internet latency' : 'Measure internet latency', 'ping latency internet speed', () => App.saveSettings({ latency: !set.latency })],
+      ['Open Task Manager', 'taskmgr windows', () => syslens.openSettings('taskmgr')],
+      ['Open Resource Monitor', 'resmon windows', () => syslens.openSettings('resmon')],
       ['Scan drive C: for what is using space', 'storage scan disk folders', () => App.go('storage', { scan: 'C:\\' })],
       ['Show the largest files', 'storage big files', () => App.go('storage', { tab: 'top' })],
       ['Show installed apps by size', 'storage programs uninstall', () => App.go('storage', { tab: 'apps' })],
       [s.paused ? 'Resume live updates' : 'Pause live updates', 'freeze stop speed', () => App.setSpeed(s.paused ? 1000 : 0)],
       ['Use the dark theme', 'theme appearance', () => App.setTheme('dark')],
       ['Use the light theme', 'theme appearance', () => App.setTheme('light')],
-      ['Match the Windows theme', 'theme appearance auto system', () => App.setTheme('system')],
+      ['Match the Windows theme', 'theme appearance auto system', () => App.setTheme('auto')],
       ['Hide personal info (for screenshots)', 'privacy screenshot blur user name', () => App.togglePrivacy()],
       ['Show the SysLens log', 'log debug troubleshoot', () => syslens.openLog()],
       ['Open Windows Settings: Startup apps', 'settings', () => syslens.openSettings('startup')],
@@ -45,7 +59,10 @@ const Palette = (() => {
   }
 
   function candidates() {
-    const out = PAGES.map(([id, name, desc]) => ({ kind: 'Pages', glyph: 'page', name, desc, words: desc, run: () => App.go(id) }));
+    // Pages in the order the sidebar shows them (hidden ones included: this is how to reach them).
+    const order = [...((App.settings && App.settings.navOrder) || []), 'settings'];
+    const pages = PAGES.slice().sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]));
+    const out = pages.map(([id, name, desc]) => ({ kind: 'Pages', glyph: 'page', name, desc, words: desc, run: () => App.go(id) }));
     const s = App.snap;
     if (s) {
       for (const g of s.groups || []) {
@@ -91,7 +108,7 @@ const Palette = (() => {
   function search(q) {
     q = q.trim().toLowerCase();
     const all = candidates();
-    if (!q) return all.filter((x) => x.kind === 'Pages' || (x.kind === 'Actions' && /scan|pause|resume|hide personal/i.test(x.name)));
+    if (!q) return all.filter((x) => x.kind === 'Pages' || (x.kind === 'Actions' && /^(Run new task|Scan drive|Pause|Resume|Copy a system)/i.test(x.name)));
     const scored = all.map((x) => ({ x, s: score(x, q) })).filter((r) => r.s > 0);
     scored.sort((a, b) => b.s - a.s || (b.x.weight || 0) - (a.x.weight || 0));
     const per = new Map();

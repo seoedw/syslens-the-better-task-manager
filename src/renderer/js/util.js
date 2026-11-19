@@ -235,13 +235,88 @@ const U = (() => {
     });
   }
 
-  function toast(message, kind = 'info', ms = 4500) {
+  /**
+   * A dialog with arbitrary content. Returns { el, close }. `onClose` runs once, however it
+   * closes (Esc, a click outside, or close()).
+   */
+  function modal({ title, body, wide = false, onClose } = {}) {
+    const root = document.getElementById('modalRoot');
+    root.innerHTML = `<div class="modal-backdrop"><div class="modal${wide ? ' wide' : ''}" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+      <div class="modal-head"><h3>${esc(title)}</h3><button class="btn ghost sm x" data-modal-close aria-label="Close">✕</button></div>
+      <div class="body">${body}</div></div></div>`;
+    const el = root.querySelector('.modal');
+    let closed = false;
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      root.innerHTML = '';
+      document.removeEventListener('keydown', onKey, true);
+      if (onClose) onClose();
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        close();
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    root.querySelector('.modal-backdrop').addEventListener('mousedown', (e) => {
+      if (e.target.classList.contains('modal-backdrop')) close();
+    });
+    el.querySelector('[data-modal-close]').addEventListener('click', close);
+    return { el, close };
+  }
+
+  function toast(message, kind = 'info', ms = 4500, action = null) {
     const box = document.getElementById('toasts');
     const t = document.createElement('div');
     t.className = `toast ${kind}`;
-    t.textContent = message;
+    const text = document.createElement('span');
+    text.textContent = message;
+    t.appendChild(text);
+    if (action) {
+      const b = document.createElement('button');
+      b.className = 'toast-btn';
+      b.textContent = action.label;
+      b.addEventListener('click', () => {
+        t.remove();
+        action.run();
+      });
+      t.appendChild(b);
+    }
     box.appendChild(t);
     setTimeout(() => t.remove(), ms);
+  }
+
+  /** Copy text to the clipboard; says so in a toast. */
+  async function copy(text, what = 'Copied') {
+    const s = String(text == null ? '' : text);
+    try {
+      await navigator.clipboard.writeText(s);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = s;
+      ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    toast(`${what} to the clipboard.`, 'good', 2200);
+  }
+
+  /** "Ctrl+Alt+S" -> <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>S</kbd> */
+  function keys(combo) {
+    return combo
+      .split('+')
+      .map((k) => `<kbd>${esc(k)}</kbd>`)
+      .join('<span class="kplus">+</span>');
+  }
+
+  /** The interface size chosen in Settings (charts render sharper knowing it). */
+  function zoom() {
+    const z = Number(document.documentElement.dataset.text || 100);
+    return Number.isFinite(z) && z > 0 ? z / 100 : 1;
   }
 
   // ---------- icons ----------
@@ -417,7 +492,11 @@ const U = (() => {
     pii,
     glyph,
     confirm,
+    modal,
     toast,
+    copy,
+    keys,
+    zoom,
     icon,
     iconSrc,
     DEFAULT_ICON,

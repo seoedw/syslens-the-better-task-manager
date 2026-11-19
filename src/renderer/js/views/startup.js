@@ -1,7 +1,8 @@
 'use strict';
-/* global U, App, syslens */
+/* global U, App, syslens, Menu, Actions */
 
-// Startup apps: everything that starts with Windows, whether it's on, and what it costs now.
+// Startup apps: everything that starts with Windows, whether it's on, what it costs now, and a
+// switch to turn each one off (the same switch Task Manager and Settings use).
 const StartupView = (() => {
   let root;
   let data = null;
@@ -38,10 +39,39 @@ const StartupView = (() => {
       const g = e.target.closest('[data-group]');
       if (g) App.go('processes', { group: g.dataset.group });
     });
+    root.addEventListener('change', async (e) => {
+      const box = e.target.closest('[data-entry-toggle]');
+      if (!box) return;
+      const entry = view.find((x) => x.id === box.dataset.entryToggle);
+      if (!entry) return;
+      box.disabled = true;
+      const ok = await Actions.startupToggle(entry, box.checked);
+      if (ok) setEnabled(entry.id, box.checked);
+      else box.checked = !box.checked;
+      box.disabled = false;
+    });
+    root.addEventListener('contextmenu', (e) => {
+      const tr = e.target.closest('tr[data-entry]');
+      if (!tr) return;
+      const entry = view.find((x) => x.id === tr.dataset.entry);
+      if (entry) Menu.openAt(e, Actions.startupMenu(entry, (on) => setEnabled(entry.id, on)));
+    });
     U.$('#su-q').addEventListener('input', (e) => {
       st.q = e.target.value.trim().toLowerCase();
       render();
     });
+  }
+
+  // What's on screen, with the running app matched to each entry (for the menus).
+  let view = [];
+
+  /** Reflect a change at once; the list is re-read in the background. */
+  function setEnabled(id, on) {
+    const item = data && data.list.find((x) => x.id === id);
+    if (item) item.enabled = on;
+    App.setCount('navStartupCount', data.list.filter((x) => x.enabled).length);
+    render();
+    setTimeout(() => load(true), 1500);
   }
 
   async function load(refresh = false) {
@@ -94,7 +124,7 @@ const StartupView = (() => {
       <div class="sum"><div class="v">${running.length}</div><div class="k">of those are running now</div></div>
       <div class="sum"><div class="v">${U.bytes(cost)}</div><div class="k">memory they use right now</div></div>
       <div class="sum"><div class="v">${items.length - enabled.length}</div><div class="k">turned off</div></div>
-      <div class="note">SysLens shows these read-only. To stop something from starting with Windows, use <button class="link" data-settings="startup">Settings › Apps › Startup</button> or the app’s own settings. Scheduled tasks that run at sign-in are listed too, since they start apps the same way.</div>`;
+      <div class="note">Use the switch to stop something from starting with Windows; it stays installed and you can still open it yourself. Entries for all users need SysLens to run as administrator. Scheduled tasks that run at sign-in are listed too, since they start apps the same way.</div>`;
 
     let list = items.filter((x) => (st.filter === 'enabled' ? x.enabled : st.filter === 'disabled' ? !x.enabled : true));
     if (st.q) list = list.filter((x) => `${x.name} ${x.publisher} ${x.description} ${x.command} ${x.where}`.toLowerCase().includes(st.q));
@@ -102,27 +132,36 @@ const StartupView = (() => {
     // Entries registered under an ID ("GoogleChromeAutoLaunch_CAF4…", "electron.app.Notion") read
     // better by the program's own name, with the entry name underneath.
     const opaque = (n) => /[0-9a-f]{12,}/i.test(n) || /^[a-z0-9]+(\.[a-z0-9]+){2,}$/i.test(n) || /^[A-Za-z0-9]+_[A-Za-z0-9_]+$/.test(n);
+    view = list.map((x) => ({ ...x, title: opaque(x.name) && x.description ? x.description : x.name }));
     const rows = list
       .map((x) => {
         const title = opaque(x.name) && x.description ? x.description : x.name;
         const sub = [x.publisher, title !== x.name ? x.name : x.description && x.description !== x.name ? x.description : ''].filter(Boolean).join(' · ');
         const loc = x.exe || x.file;
-        return `<tr class="hov${x.enabled ? '' : ' dim'}">
+        const can = !!x.toggle;
+        const sw = `<label class="switch" data-tip="${can ? (x.enabled ? 'Starts with Windows. Switch off to stop that.' : 'Turned off. Switch on to start it with Windows again.') : x.policy ? 'Set by your organization’s policy' : 'Can’t be changed here'}"><input type="checkbox" data-entry-toggle="${U.esc(x.id)}" ${x.enabled ? 'checked' : ''} ${can ? '' : 'disabled'}>${x.enabled ? (x.policy ? 'On (policy)' : 'On') : 'Off'}</label>`;
+        return `<tr class="hov${x.enabled ? '' : ' dim'}" data-entry="${U.esc(x.id)}">
           <td><div class="appcell">${U.icon(x.exe || null)}<div class="two-line"><span class="nm">${U.esc(title)}</span><span class="sub">${U.esc(sub || '—')}</span></div></div></td>
-          <td>${x.enabled ? U.status(x.policy ? 'On (set by policy)' : 'On', 'ok') : U.status('Off', 'off')}</td>
+          <td>${sw}</td>
           <td class="r">${x.run ? `<button class="link" data-group="${U.esc(x.run.key)}">${U.bytes(x.run.priv)}</button>${x.run.count > 1 ? ` <span class="faint">· ${x.run.count}</span>` : ''}` : '<span class="faint">Not running</span>'}</td>
           <td class="faint ellipsis">${U.esc(x.where)}</td>
           <td class="ellipsis" data-tip="${U.esc(x.command)}"><span class="mono faint">${U.esc(x.command)}</span></td>
           <td class="r">${loc ? `<button class="btn sm" data-loc="${U.esc(loc)}">Show</button>` : ''}</td></tr>`;
       })
       .join('');
-    U.$('#su-table').innerHTML = `<thead><tr><th style="width:30%">Name</th><th style="width:118px">Status</th><th class="r" style="width:120px">Running now</th><th style="width:19%">Starts from</th><th>Command</th><th style="width:64px"></th></tr></thead><tbody>${
+    U.$('#su-table').innerHTML = `<thead><tr><th style="width:30%">Name</th><th style="width:118px">Status</th><th class="r" style="width:120px">Running now</th><th style="width:19%">Starts from</th><th>Command</th><th style="width:72px"></th></tr></thead><tbody>${
       rows || `<tr><td colspan="6" class="empty">${loading ? 'Reading…' : 'Nothing here.'}</td></tr>`
     }</tbody>`;
   }
 
+  function hide() {
+    const t = U.$('#su-table');
+    if (t) t.innerHTML = '';
+  }
+
   return {
     init,
+    hide,
     // Re-render now and then so "Running now" stays current, without rebuilding every second.
     render: (() => {
       let last = 0;

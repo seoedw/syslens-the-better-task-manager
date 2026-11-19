@@ -3,11 +3,12 @@
 // streams live data to it, and opens it in an app window (Edge/Chrome --app mode).
 // launcher.js normally starts this and restarts it if it ever crashes or hangs.
 //
-//   node src/main/launcher.js             normal start (reuses a running instance)
+//   node src/main/launcher.js             normal start (brings a running SysLens to the front)
 //   node src/main/server.js --no-window   server only; prints the URL instead of opening a window (dev)
 //   --debug                               also log to the console (the log file is always written)
 
 const http = require('http');
+const net = require('net');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -20,7 +21,10 @@ const { ServicesService } = require('./services');
 const { StartupService } = require('./startup');
 const { HistoryService } = require('./history');
 const { MachineService } = require('./machine');
+const { Settings, BACKGROUND_FILE } = require('./settings');
+const { INSTANCE_FILE, readInstance, showExisting } = require('./instance');
 const { iconDataUrl } = require('./icons');
+const w = require('./win32');
 const shellx = require('./shell');
 const { createLogger, DATA_DIR, LOG_FILE } = require('./log');
 const pkg = require('../../package.json');
@@ -36,10 +40,12 @@ function parseArgs(list) {
 }
 
 const argv = parseArgs(process.argv.slice(2));
+const APP_DIR = path.resolve(__dirname, '..', '..');
 const RENDERER = path.join(__dirname, '..', 'renderer');
-const ASSETS = path.join(__dirname, '..', '..', 'assets');
-const INSTANCE_FILE = path.join(DATA_DIR, 'instance.json');
-const PROFILE_DIR = path.join(DATA_DIR, 'browser');
+const ASSETS = path.join(APP_DIR, 'assets');
+const ADMIN = w.isAdmin();
+// The administrator window gets a browser profile of its own (see shell.openAppWindow).
+const PROFILE_DIR = path.join(DATA_DIR, ADMIN ? 'browser-admin' : 'browser');
 const DEV = !!(argv['no-window'] || argv['keep-alive']);
 const SUPERVISED = typeof process.send === 'function';
 const MIME = {
@@ -47,6 +53,7 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.png': 'image/png',
+  '.jpg': 'image/jpeg',
   '.ico': 'image/x-icon',
   '.svg': 'image/svg+xml',
 };
@@ -81,6 +88,7 @@ let port = 0;
 let server = null;
 let monitor = null;
 let storage = null;
+const settings = new Settings();
 // Loaded on demand, when their page is opened.
 const network = new NetworkService();
 const services = new ServicesService();
@@ -96,6 +104,7 @@ let byeAt = 0;
 let windowMode = 'none'; // 'app' (own browser profile, can be watched), 'tab' (default browser), 'none' (dev)
 let windowOpenedAt = Date.now();
 let shuttingDown = false;
+let steppingAside = false; // an administrator instance took over
 
 // ---------- helpers ----------
 const round = (_k, v) => (typeof v === 'number' && !Number.isInteger(v) ? Math.round(v * 100) / 100 : v);
@@ -104,10 +113,14 @@ function appUrl(p, t) {
   return `http://127.0.0.1:${p}/#t=${t}`;
 }
 
+function sameSecret(a, b) {
+  const x = Buffer.from(String(a || ''));
+  const y = Buffer.from(b);
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+
 function tokenOk(req) {
-  const got = Buffer.from(String(req.headers['x-syslens-token'] || ''));
-  const want = Buffer.from(token);
-  return got.length === want.length && crypto.timingSafeEqual(got, want);
+  return sameSecret(req.headers['x-syslens-token'], token);
 }
 
 function pageId(req) {
@@ -122,6 +135,7 @@ function send(res, status, body, type = 'application/json; charset=utf-8') {
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'no-referrer',
+    'X-Frame-Options': 'DENY',
   });
   res.end(body);
 }
@@ -167,15 +181,132 @@ function broadcast(event, data) {
   for (const res of clients.keys()) writeTo(res, payload);
 }
 
+/** Process targets from the page: [{ pid, key }], checked and capped. */
+function cleanTargets(targets) {
+  if (!Array.isArray(targets)) return [];
+  return targets
+    .filter((t) => t && Number.isInteger(t.pid) && t.pid > 0)
+    .slice(0, 500)
+    .map((t) => ({ pid: t.pid, key: typeof t.key === 'string' ? t.key : null }));
+}
+
+// ---------- the app window ----------
+/** SysLens's own top-level windows (its browser process's windows). */
+function ownWindows() {
+  const pids = new Set(monitor.procs.selfBrowsers);
+  if (!pids.size) return [];
+  try {
+    return w.topWindows().filter((x) => pids.has(x.pid));
+  } catch {
+    return [];
+  }
+}
+
+function openWindow() {
+  shellx.openAppWindow(appUrl(port, token), PROFILE_DIR, { elevated: ADMIN });
+  windowOpenedAt = Date.now();
+}
+
+/** Bring the window forward, or open one if it was closed. */
+function showWindow() {
+  const wins = ownWindows();
+  if (wins.length) {
+    w.focusWindow(wins[0].hwnd);
+    return { ok: true, focused: true };
+  }
+  if (windowMode === 'app' && !shuttingDown && !steppingAside) {
+    openWindow();
+    return { ok: true, opened: true };
+  }
+  return { ok: false };
+}
+
+const topmostDone = new Set();
+function applyTopmost() {
+  const on = settings.get('alwaysOnTop');
+  for (const win of ownWindows()) {
+    if (on && topmostDone.has(win.hwnd)) continue;
+    w.setTopmost(win.hwnd, on);
+    if (on) topmostDone.add(win.hwnd);
+  }
+  if (!on) topmostDone.clear();
+}
+
+/** "Switch to": bring an app's window forward (optionally minimizing SysLens, as Task Manager can). */
+function switchTo(pids) {
+  if (!Array.isArray(pids)) return { ok: false };
+  const want = new Set(pids.filter((p) => Number.isInteger(p)));
+  const win = w.topWindows().find((x) => want.has(x.pid));
+  if (!win) return { ok: false, error: 'It has no window to switch to' };
+  const ok = w.focusWindow(win.hwnd);
+  if (ok && settings.get('minimizeOnSwitch')) for (const own of ownWindows()) w.minimizeWindow(own.hwnd);
+  return { ok };
+}
+
+/** End Windows Explorer and make sure it comes back (Windows restarts it on its own). */
+async function restartExplorer() {
+  const shells = monitor.procs.explorers();
+  if (!shells.length) {
+    if (ADMIN) return { ok: false, error: 'Windows Explorer isn’t running' };
+    execFile('explorer.exe', { windowsHide: false }, () => {});
+    return { ok: true, note: 'Explorer wasn’t running, so SysLens started it.' };
+  }
+  const res = monitor.procs.kill(shells.map((p) => ({ pid: p.pid, key: p.key })));
+  if (!res.some((r) => r.ok)) return { ok: false, error: res[0].error };
+  await sleep(3000);
+  monitor.procs.sample(); // a fresh look rather than a second-old one
+  if (!monitor.procs.explorers().length) {
+    // An elevated Explorer would run the whole desktop as administrator: leave that to Windows.
+    if (ADMIN) return { ok: true, note: 'Windows will restart Explorer in a moment.' };
+    execFile('explorer.exe', { windowsHide: false }, () => {});
+  }
+  return { ok: true };
+}
+
+// ---------- internet latency (opt-in) ----------
+// One TCP handshake to Cloudflare's 1.1.1.1 every 5 s while a window is watching; it measures
+// the round trip without sending any data.
+const LATENCY_TARGET = { host: '1.1.1.1', port: 443, label: 'Cloudflare (1.1.1.1)' };
+let latency = null; // { ms, at, lost, target }
+let latencyBusy = false;
+
+function tcpPing(host, p, timeout = 2000) {
+  return new Promise((resolve) => {
+    const t0 = process.hrtime.bigint();
+    const sock = net.connect({ host, port: p });
+    let settled = false;
+    const done = (ok) => {
+      if (settled) return;
+      settled = true;
+      sock.destroy();
+      resolve(ok ? Number(process.hrtime.bigint() - t0) / 1e6 : null);
+    };
+    sock.setTimeout(timeout, () => done(false));
+    sock.once('connect', () => done(true));
+    sock.once('error', () => done(false));
+  });
+}
+
+async function latencyTick() {
+  if (!settings.get('latency') || !clients.size || monitor.background || latencyBusy) return;
+  latencyBusy = true;
+  try {
+    const ms = await tcpPing(LATENCY_TARGET.host, LATENCY_TARGET.port);
+    latency = { ms, at: Date.now(), target: LATENCY_TARGET.label };
+  } finally {
+    latencyBusy = false;
+  }
+}
+
 // ---------- compact snapshot stream ----------
 // Static per-process/per-app details (names, paths, window titles) are sent once and again
 // only when they change; each tick carries just the numbers. History is sent in full when a
 // client connects, then one new point per tick, and the system inventory only when it
 // changes. Per-process rows (the bulk of each tick) are left out unless a page that shows
 // them is open: see 'app:need'. bridge.js reassembles the full snapshot.
-const P_META = ['pid', 'ppid', 'name', 'created', 'session', 'exe', 'path', 'pathGuessed', 'role', 'access', 'priority', 'desc', 'company', 'display', 'isWindows', 'critical', 'group', 'host', 'windows'];
+const P_META = ['pid', 'ppid', 'name', 'created', 'session', 'exe', 'path', 'pathGuessed', 'role', 'access', 'priority', 'desc', 'company', 'display', 'isWindows', 'critical', 'group', 'host', 'windows', 'suspended', 'eco'];
 const P_DYN = ['cpu', 'cpuTime', 'priv', 'ws', 'peakWs', 'commit', 'pagedPool', 'nonpagedPool', 'pageFaults', 'ioR', 'ioW', 'ioO', 'io', 'ioTotal', 'handles', 'threads', 'gpu', 'gpuShared', 'gpuDedicated'];
-const G_META = ['name', 'exe', 'path', 'company', 'desc', 'host', 'type', 'critical', 'windows', 'hasWindows'];
+const G_META = ['name', 'exe', 'path', 'company', 'desc', 'host', 'type', 'critical', 'windows', 'hasWindows', 'suspended', 'eco'];
 const G_DYN = ['count', 'pids', 'cpu', 'priv', 'ws', 'commit', 'gpu', 'gpuShared', 'gpuDedicated', 'io', 'handles', 'threads'];
 const PROCS_LEASE = 20000;
 let sentMeta = { procs: new Map(), groups: new Map(), sys: '' };
@@ -207,7 +338,7 @@ function packSnapshot(s, full, withProcs = true) {
   const { procs, groups, hist, sys, ...rest } = s;
   const p = full || withProcs ? packRows(procs, P_META, P_DYN, sentMeta.procs, full) : null;
   const g = packRows(groups, G_META, G_DYN, sentMeta.groups, full);
-  const out = { ...rest, packed: { pf: P_DYN, pm: p ? p.meta : {}, pr: p ? p.rows : null, gf: G_DYN, gm: g.meta, gr: g.rows } };
+  const out = { ...rest, latency, packed: { pf: P_DYN, pm: p ? p.meta : {}, pr: p ? p.rows : null, gf: G_DYN, gm: g.meta, gr: g.rows } };
   const sysJson = JSON.stringify(sys || null);
   if (full || sysJson !== sentMeta.sys) out.sys = sys;
   if (full) {
@@ -241,11 +372,37 @@ function broadcastSnapshot(s) {
 }
 
 // ---------- API ----------
+function appInfo() {
+  return {
+    version: pkg.version,
+    admin: monitor.admin,
+    node: process.version,
+    user: os.userInfo().username,
+    host: os.hostname(),
+    dataDir: DATA_DIR,
+    logFile: LOG_FILE,
+    appDir: APP_DIR,
+    portable: path.dirname(process.execPath).toLowerCase().startsWith(APP_DIR.toLowerCase()),
+    latencyTarget: LATENCY_TARGET.label,
+  };
+}
+
+function readChangelog() {
+  try {
+    return fs.readFileSync(path.join(APP_DIR, 'CHANGELOG.md'), 'utf8').slice(0, 256 * 1024);
+  } catch {
+    return '';
+  }
+}
+
 function buildHandlers() {
   return {
     snapshot: () => monitor.latest,
     interval: (ms) => {
-      if (typeof ms === 'number' && Number.isFinite(ms)) monitor.setInterval(ms);
+      if (typeof ms === 'number' && Number.isFinite(ms)) {
+        monitor.setInterval(ms);
+        if (ms > 0) settings.set({ interval: ms });
+      }
       return { interval: monitor.interval, paused: monitor.paused };
     },
     'app:visible': (visible) => {
@@ -257,37 +414,50 @@ function buildHandlers() {
       if (what && what.procs) procsWantedUntil = Date.now() + PROCS_LEASE;
       return true;
     },
-    'app:info': () => ({
-      version: pkg.version,
-      admin: monitor.admin,
-      node: process.version,
-      user: os.userInfo().username,
-      host: os.hostname(),
-      dataDir: DATA_DIR,
-      logFile: LOG_FILE,
-      appDir: path.resolve(__dirname, '..', '..'),
-    }),
+    // Everything the page needs before it shows anything: settings, and the names that
+    // "Hide personal info" masks.
+    'app:boot': () => ({ settings: settings.get(), info: appInfo() }),
+    'app:info': () => appInfo(),
     'app:openLog': () => shellx.showItem(LOG_FILE),
+    'app:openData': () => shellx.openFolder(DATA_DIR),
+    'app:changelog': () => readChangelog(),
+    'app:elevate': () => elevate(),
+    'app:hotkey': async (combo) => {
+      if (typeof combo !== 'string') return { ok: false, error: 'Not a shortcut' };
+      const before = settings.get('hotkey');
+      if (settings.set({ hotkey: combo }).hotkey !== combo) return { ok: false, error: 'That key combination can’t be used' };
+      const r = await shellx.setHotkey(combo);
+      if (!r.ok) settings.set({ hotkey: before });
+      return r;
+    },
+    'settings:get': () => settings.get(),
+    'settings:set': (patch) => settings.set(patch),
+    'settings:reset': () => settings.reset(),
+    'settings:background': (dataUrl) => settings.setBackgroundImage(dataUrl),
     'machine:get': (refresh) => machine.get(!!refresh),
-    'net:connections': (opts) => network.connections({ pid: opts && Number.isInteger(opts.pid) ? opts.pid : null, resolve: !(opts && opts.resolve === false) }),
+    'net:connections': (opts) =>
+      network.connections({ pid: opts && Number.isInteger(opts.pid) ? opts.pid : null, resolve: settings.get('resolveHosts') && !(opts && opts.resolve === false) }),
     'net:adapters': (refresh) => network.adapterInfo(!!refresh),
     'services:list': (refresh) => services.list(!!refresh),
+    'svc:control': (name, action) => services.control(name, action),
+    'svc:startType': (name, type) => services.setStartType(name, type),
     'startup:list': (refresh) => startup.list(!!refresh),
+    'startup:toggle': (id, on) => startup.setEnabled(id, !!on),
     'history:get': (refresh) => history.get(!!refresh),
-    'app:elevate': () => elevate(),
     'proc:details': (pid) => (Number.isInteger(pid) ? monitor.procs.details(pid) : null),
-    'proc:kill': (targets) => {
-      if (!Array.isArray(targets)) return [];
-      const clean = targets
-        .filter((t) => t && Number.isInteger(t.pid))
-        .slice(0, 500)
-        .map((t) => ({ pid: t.pid, key: typeof t.key === 'string' ? t.key : null }));
-      return monitor.procs.kill(clean);
-    },
+    'proc:kill': (targets) => monitor.procs.kill(cleanTargets(targets)),
+    'proc:killTree': (targets) => monitor.procs.killTree(cleanTargets(targets)),
+    'proc:priority': (targets, level) => monitor.procs.setPriority(cleanTargets(targets), level),
+    'proc:efficiency': (targets, on) => monitor.procs.setEfficiency(cleanTargets(targets), !!on),
+    'proc:suspend': (targets, on) => monitor.procs.suspend(cleanTargets(targets), !!on),
+    'proc:switchTo': (pids) => switchTo(pids),
+    'proc:restartExplorer': () => restartExplorer(),
+    'task:run': (command, admin) => shellx.runTask(command, !!admin),
     icon: (p) => (shellx.isSafePath(p) ? iconDataUrl(p) : null),
     'shell:showItem': (p) => shellx.showItem(p),
     'shell:openFolder': (p) => shellx.openFolder(p),
     'shell:settings': (page) => shellx.openSettings(page),
+    'shell:search': (text) => shellx.searchOnline(text),
     'storage:drives': () => storage.drives(),
     'storage:state': () => storage.state(),
     'storage:scan': (root) => (shellx.isSafePath(root) ? storage.startScan(root) : null),
@@ -311,7 +481,7 @@ async function handleCall(req, res) {
   if (!String(req.headers['content-type'] || '').startsWith('application/json')) return send(res, 415, '{"error":"JSON only"}');
   let msg;
   try {
-    msg = JSON.parse(await readBody(req));
+    msg = JSON.parse(await readBody(req, 12 * 1024 * 1024));
   } catch {
     return send(res, 400, '{"error":"Bad JSON"}');
   }
@@ -363,18 +533,15 @@ function handleBye(req, res) {
   send(res, 200, '{"ok":true}');
 }
 
-/** The elevated instance announces its token here; we pass it to the page and step aside. */
-async function handleHandoff(req, res) {
-  let msg;
-  try {
-    msg = JSON.parse(await readBody(req, 4096));
-  } catch {
-    return send(res, 400, '{}');
-  }
-  if (!msg || typeof msg.token !== 'string' || !/^[A-Za-z0-9_-]{20,64}$/.test(msg.token)) return send(res, 400, '{}');
-  send(res, 200, '{"ok":true}');
-  broadcast('handoff', { token: msg.token });
-  setTimeout(() => shutdown('handed off to the administrator instance'), 250);
+/** The page, with the settings that shape its first paint (theme, density…) already applied. */
+function serveIndex(res) {
+  fs.readFile(path.join(RENDERER, 'index.html'), 'utf8', (err, html) => {
+    if (err) return send(res, 404, 'Not found', 'text/plain');
+    const s = settings.get();
+    // Every value here passed a whitelist check in settings.js.
+    const attrs = ` data-pref-theme="${s.theme}" data-density="${s.density}" data-text="${s.textSize}" data-bg="${s.background}"`;
+    send(res, 200, html.replace('<html lang="en">', `<html lang="en"${attrs}>`), MIME['.html']);
+  });
 }
 
 function serveStatic(pathname, res) {
@@ -385,8 +552,8 @@ function serveStatic(pathname, res) {
     return send(res, 400, 'Bad path', 'text/plain');
   }
   let file;
-  if (rel === '/' || rel === '/index.html') file = path.join(RENDERER, 'index.html');
-  else if (rel === '/icon.png') file = path.join(ASSETS, 'icon.png');
+  if (rel === '/' || rel === '/index.html') return serveIndex(res);
+  if (rel === '/icon.png') file = path.join(ASSETS, 'icon.png');
   else if (rel === '/favicon.ico') file = path.join(ASSETS, 'icon.ico');
   else {
     file = path.normalize(path.join(RENDERER, rel));
@@ -395,6 +562,15 @@ function serveStatic(pathname, res) {
   fs.readFile(file, (err, data) => {
     if (err) return send(res, 404, 'Not found', 'text/plain');
     send(res, 200, data, MIME[path.extname(file).toLowerCase()] || 'application/octet-stream');
+  });
+}
+
+/** The background picture. CSS can't send headers, so the token comes in the query instead. */
+function serveBackground(url, res) {
+  if (!sameSecret(url.searchParams.get('t'), token)) return send(res, 403, 'Forbidden', 'text/plain');
+  fs.readFile(BACKGROUND_FILE, (err, data) => {
+    if (err) return send(res, 404, 'Not found', 'text/plain');
+    send(res, 200, data, MIME['.jpg']);
   });
 }
 
@@ -409,13 +585,18 @@ async function onRequest(req, res) {
     return send(res, 400, 'Bad request', 'text/plain');
   }
   const p = url.pathname;
+  // Opening SysLens again only brings its window forward, so it needs no token (the
+  // administrator instance never writes its token to disk). Web pages can't send the header.
+  if (p === '/api/focus' && req.method === 'POST' && req.headers['x-syslens-focus'] === '1') {
+    return send(res, 200, JSON.stringify({ app: 'syslens', ...showWindow() }));
+  }
+  if (p === '/api/background' && req.method === 'GET') return serveBackground(url, res);
   if (p.startsWith('/api/')) {
     if (!tokenOk(req)) return send(res, 403, '{"error":"Forbidden"}');
     if (p === '/api/ping') return send(res, 200, '{"ok":true}');
     if (p === '/api/events' && req.method === 'GET') return openEvents(req, res);
     if (p === '/api/call' && req.method === 'POST') return handleCall(req, res);
     if (p === '/api/bye' && req.method === 'POST') return handleBye(req, res);
-    if (p === '/api/handoff' && req.method === 'POST') return handleHandoff(req, res);
     return send(res, 404, '{"error":"Not found"}');
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed', 'text/plain');
@@ -449,12 +630,13 @@ function lifecycleTick() {
   // so start counting again rather than treating the window as gone.
   if (now - lastTickAt > LIFECYCLE_TICK * 5 && !clients.size) lastClientAt = now;
   lastTickAt = now;
+  if (clients.size && settings.get('alwaysOnTop')) applyTopmost();
   if (shuttingDown || windowMode === 'none' || clients.size) return;
   const idle = now - lastClientAt;
   if (windowMode === 'app') {
     if (byeAt && now - byeAt > BYE_GRACE) return shutdown('the window was closed');
     if (appWindowRunning()) return; // still open: it reconnects, however long that takes
-    if (!everConnected && now - windowOpenedAt < STARTUP_GRACE) return;
+    if (now - windowOpenedAt < STARTUP_GRACE) return; // a window was just opened
     if (idle > CLOSED_GRACE) shutdown(everConnected ? 'the window was closed' : 'the window never opened');
     return;
   }
@@ -481,8 +663,8 @@ function shutdown(reason) {
     }
   }
   try {
-    const info = JSON.parse(fs.readFileSync(INSTANCE_FILE, 'utf8'));
-    if (info.pid === process.pid) fs.unlinkSync(INSTANCE_FILE);
+    const info = readInstance();
+    if (info && info.pid === process.pid) fs.unlinkSync(INSTANCE_FILE);
   } catch {
     /* no instance file */
   }
@@ -493,40 +675,45 @@ function shutdown(reason) {
 function writeInstance() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const info = { pid: process.pid, port, started: Date.now(), admin: monitor.admin };
-  // An elevated instance's token is never written to disk.
+  // An administrator instance's token is never written to disk: any program could read it.
   if (!monitor.admin) info.token = token;
   fs.writeFileSync(INSTANCE_FILE, JSON.stringify(info));
 }
 
-async function attachToExisting() {
-  let info;
-  try {
-    info = JSON.parse(fs.readFileSync(INSTANCE_FILE, 'utf8'));
-  } catch {
-    return false;
-  }
-  if (!info.port || !info.token) return false;
-  try {
-    const r = await fetch(`http://127.0.0.1:${info.port}/api/ping`, { headers: { 'X-SysLens-Token': info.token }, signal: AbortSignal.timeout(1500) });
-    if (!r.ok) return false;
-  } catch {
-    return false;
-  }
-  shellx.openAppWindow(appUrl(info.port, info.token), PROFILE_DIR);
-  return true;
-}
-
-/** Start an elevated copy that takes over this port; the open window reconnects to it. */
+/**
+ * Restart as administrator. The elevated copy opens a window of its own (its token never
+ * passes through this non-elevated server or its window); once it is up, this one closes
+ * its window and quits.
+ */
 function elevate() {
   if (monitor.admin) return { ok: true };
   const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
-  const args = `--jitless "${path.join(__dirname, 'launcher.js')}" --adopt=${port} --parent-token=${token}`;
+  const args = `--jitless "${path.join(__dirname, 'launcher.js')}" --elevated`;
   const command = `Start-Process -FilePath ${q(process.execPath)} -ArgumentList ${q(args)} -Verb RunAs -WindowStyle Hidden`;
   return new Promise((resolve) => {
     execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { windowsHide: true }, (err) => {
-      resolve(err ? { ok: false, error: 'Administrator access was not granted.' } : { ok: true, restarting: true });
+      if (err) return resolve({ ok: false, error: 'Administrator access was not granted.' });
+      stepAsideForAdmin();
+      resolve({ ok: true });
     });
   });
+}
+
+async function stepAsideForAdmin() {
+  const until = Date.now() + 45000;
+  while (Date.now() < until && !shuttingDown) {
+    await sleep(500);
+    const info = readInstance();
+    if (info && info.admin && info.pid !== process.pid) {
+      steppingAside = true;
+      broadcast('handoff', { admin: true });
+      await sleep(2500); // let the administrator window appear first
+      for (const win of ownWindows()) w.closeWindow(win.hwnd);
+      setTimeout(() => shutdown('handed over to the administrator window'), 1500);
+      return;
+    }
+  }
+  if (!shuttingDown) broadcast('handoff', { failed: true });
 }
 
 function listen(p) {
@@ -557,18 +744,32 @@ async function listenWithRetry(p, ms) {
   }
 }
 
+/** React to settings that live outside the page. */
+function onSettingsChanged(changed) {
+  if ('interval' in changed && !monitor.paused) monitor.setInterval(changed.interval);
+  if ('alwaysOnTop' in changed) applyTopmost();
+  if ('startWithWindows' in changed) {
+    shellx.setAutostart(changed.startWithWindows).then((r) => {
+      if (!r.ok) log('could not change start with Windows:', r.error);
+    });
+  }
+  if ('latency' in changed && !changed.latency) latency = null;
+}
+
 async function main() {
   const restarted = !!argv.restarted;
-  if (!restarted && !argv.adopt && !DEV && !argv.new && (await attachToExisting())) {
-    log('already running; opened another window on it');
+  if (!restarted && !argv.elevated && !DEV && !argv.new && (await showExisting())) {
+    log('already running; brought its window to the front');
     return process.exit(0);
   }
-  log(`starting SysLens ${pkg.version}${restarted ? ' again after a crash' : ''}${argv.adopt ? ' as administrator' : ''}`);
+  log(`starting SysLens ${pkg.version}${restarted ? ' again after a crash' : ''}${ADMIN ? ' as administrator' : ''}`);
 
   monitor = new Monitor();
   if (SUPERVISED) monitor.procs.selfPids.add(process.ppid); // the launcher belongs to SysLens too
   storage = new StorageService();
   HANDLERS = buildHandlers();
+  settings.onChange(onSettingsChanged);
+  monitor.interval = settings.get('interval'); // start() schedules the first sample
   loadSystemInfo((info) => monitor.setSystemInfo(info)).catch((err) => log('could not read system info:', err));
   monitor.on('snapshot', (s) => broadcastSnapshot(s));
   monitor.on('error', (err) => logOften(`monitor:${err && err.message}`, 'sampling failed:', err));
@@ -584,20 +785,7 @@ async function main() {
   server.requestTimeout = 0;
 
   let reusedPort = false;
-  if (argv.adopt) {
-    const target = Number(argv.adopt);
-    try {
-      await fetch(`http://127.0.0.1:${target}/api/handoff`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-SysLens-Token': String(argv['parent-token'] || '') },
-        body: JSON.stringify({ token }),
-        signal: AbortSignal.timeout(3000),
-      });
-    } catch {
-      /* the old instance may already be gone */
-    }
-    port = await listenWithRetry(target, 20000);
-  } else if (restarted && Number(argv.port)) {
+  if (restarted && Number(argv.port)) {
     try {
       port = await listenWithRetry(Number(argv.port), 10000);
       reusedPort = true;
@@ -622,12 +810,18 @@ async function main() {
   monitor.start();
   windowMode = DEV ? 'none' : shellx.findBrowser() ? 'app' : 'tab';
   const url = appUrl(port, token);
+  if (ADMIN && windowMode === 'app') {
+    fs.mkdirSync(PROFILE_DIR, { recursive: true });
+    await shellx.lockDownFolder(PROFILE_DIR).catch(() => {});
+  }
   if (argv['no-window']) console.log(`SysLens is running at ${url}`);
   // After a crash the old window is still open, and it reconnects by itself.
-  else if (!argv.adopt && !reusedPort) shellx.openAppWindow(url, PROFILE_DIR);
+  else if (!reusedPort) openWindow();
   windowOpenedAt = Date.now();
   lastClientAt = Date.now();
   setInterval(lifecycleTick, LIFECYCLE_TICK);
+  setInterval(latencyTick, 5000);
+  if (settings.get('startWithWindows') && !DEV) shellx.setAutostart(true).catch(() => {}); // keeps the path current if SysLens moved
   log(`listening on 127.0.0.1:${port}${monitor.admin ? ' as administrator' : ''}`);
 }
 

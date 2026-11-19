@@ -314,7 +314,7 @@ const Storage = (() => {
         }</div>`;
         const info = it.dir ? `${U.num(it.files)} files` : it.aggregate ? `${U.num(it.files)} files` : it.mtime ? U.day(it.mtime) : '';
         const action = it.dir ? `<button class="btn sm" data-open="${U.esc(it.path)}">Open</button>` : it.aggregate ? '' : `<button class="btn sm" data-show="${U.esc(it.path)}">Show</button>`;
-        return `<tr class="${it.dir ? 'click' : ''}" ${it.dir ? `data-cd="${U.esc(it.path)}"` : ''}>
+        return `<tr class="${it.dir ? 'click' : ''}" ${it.dir ? `data-cd="${U.esc(it.path)}"` : ''} ${it.aggregate ? '' : `data-path="${U.esc(it.path)}" data-kind="${it.dir ? 'dir' : 'file'}" data-name="${U.esc(it.name)}"`}>
           <td>${nameCell}</td>
           <td class="r" style="width:96px;font-weight:600">${U.bytes(it.size)}</td>
           <td style="width:22%"><div class="sizebar">${U.minibar(it.size / max)}<span class="faint tabular" style="width:44px;text-align:right">${(share * 100).toFixed(1)}%</span></div></td>
@@ -359,7 +359,7 @@ const Storage = (() => {
           .slice(0, 200)
           .map((f) => {
             const dir = f.path.slice(0, f.path.length - f.name.length - 1);
-            return `<tr><td><div style="display:flex;gap:8px;align-items:center;min-width:0">${FILE}<span class="nm" style="overflow:hidden;text-overflow:ellipsis" data-tip="${U.esc(f.path)}">${U.esc(f.name)}</span></div></td>
+            return `<tr data-path="${U.esc(f.path)}" data-kind="file" data-name="${U.esc(f.name)}"><td><div style="display:flex;gap:8px;align-items:center;min-width:0">${FILE}<span class="nm" style="overflow:hidden;text-overflow:ellipsis" data-tip="${U.esc(f.path)}">${U.esc(f.name)}</span></div></td>
               <td class="sub" data-tip="${U.esc(dir)}">${U.esc(dir)}</td>
               <td class="r" style="font-weight:600">${U.bytes(f.size)}</td><td>${U.minibar(f.size / max)}</td>
               <td class="r faint">${U.day(f.mtime)}</td><td class="r"><button class="btn sm" data-show="${U.esc(f.path)}">Show</button></td></tr>`;
@@ -479,7 +479,7 @@ const Storage = (() => {
         }
         if (x.data) tip += `\nPlus ${U.bytes(x.data)} of app data`;
         const loc = x.location || '';
-        return `<tr>
+        return `<tr ${loc ? `data-path="${U.esc(loc)}" data-kind="dir"` : ''} data-name="${U.esc(x.name)}">
           <td><div class="nm" style="overflow:hidden;text-overflow:ellipsis">${U.esc(x.name)}</div><div class="sub">${U.esc([x.publisher, x.version].filter(Boolean).join(' · '))}</div></td>
           <td class="r" style="font-weight:600" data-tip="${U.esc(tip)}">${sizeText}${x.data ? `<div class="sub">+${U.bytes(x.data)} data</div>` : ''}</td>
           <td>${U.minibar((size + (x.data || 0)) / max)}</td>

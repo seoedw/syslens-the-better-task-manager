@@ -2,20 +2,22 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self'" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#1c1c1c" />
     <title>SysLens</title>
     <link rel="icon" href="/icon.png" />
     <link rel="stylesheet" href="styles.css" />
+    <script src="js/boot.js"></script>
   </head>
   <body>
+    <div class="backdrop-art" id="backdrop" aria-hidden="true"></div>
     <div class="app">
       <aside class="sidebar">
         <div class="brand drag">
           <svg class="brand-mark" viewBox="0 0 20 20" aria-hidden="true">
             <rect width="20" height="20" rx="4.5" fill="var(--accent)" />
-            <g fill="var(--bg)">
+            <g fill="var(--accent-text)">
               <rect x="4.6" y="10" width="2.6" height="5.6" rx="1" />
               <rect x="8.7" y="4.6" width="2.6" height="11" rx="1" />
               <rect x="12.8" y="7.6" width="2.6" height="8" rx="1" />
@@ -24,52 +26,13 @@
           <span>SysLens</span>
           <span class="ver" id="appVer"></span>
         </div>
-        <nav class="nav" id="nav" aria-label="Pages">
-          <button class="nav-item" data-view="overview" title="Ctrl+1">
-            <svg viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5" /><rect x="13.5" y="3.5" width="7" height="7" rx="1.5" /><rect x="3.5" y="13.5" width="7" height="7" rx="1.5" /><rect x="13.5" y="13.5" width="7" height="7" rx="1.5" /></svg>
-            <span>Overview</span>
+        <nav class="nav" id="nav" aria-label="Pages"></nav>
+        <div class="nav-end">
+          <button class="nav-item" data-view="settings" id="navSettings" title="Settings (Ctrl+,)">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>
+            <span>Settings</span>
           </button>
-          <button class="nav-item" data-view="processes" title="Ctrl+2">
-            <svg viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11" /><circle cx="4.5" cy="6" r="1.2" /><circle cx="4.5" cy="12" r="1.2" /><circle cx="4.5" cy="18" r="1.2" /></svg>
-            <span>Processes</span>
-            <span class="nav-count" id="navProcCount"></span>
-          </button>
-          <button class="nav-item" data-view="performance" title="Ctrl+3">
-            <svg viewBox="0 0 24 24"><path d="M3 20.5h18" /><path d="M4 16l4.5-5 4 3L19.5 6" /></svg>
-            <span>Performance</span>
-          </button>
-          <button class="nav-item" data-view="memory" title="Ctrl+4">
-            <svg viewBox="0 0 24 24"><rect x="2.5" y="7" width="19" height="9" rx="1.5" /><path d="M6 16v3M10 16v3M14 16v3M18 16v3" /><path d="M6.5 10.5h2.5M11 10.5h2.5M15.5 10.5h2" /></svg>
-            <span>Memory</span>
-          </button>
-          <button class="nav-item" data-view="network" title="Ctrl+5">
-            <svg viewBox="0 0 24 24"><path d="M12 19.5h.01" /><path d="M8.6 16a5 5 0 0 1 6.8 0" /><path d="M5.3 12.6a9.6 9.6 0 0 1 13.4 0" /><path d="M2 9.2a14.4 14.4 0 0 1 20 0" /></svg>
-            <span>Network</span>
-          </button>
-          <div class="nav-sep" role="separator"></div>
-          <button class="nav-item" data-view="storage" title="Ctrl+6">
-            <svg viewBox="0 0 24 24"><rect x="3" y="13" width="18" height="7" rx="1.5" /><path d="M5 13l2.5-8h9L19 13" /><path d="M16.5 16.5h.01" /></svg>
-            <span>Storage</span>
-          </button>
-          <button class="nav-item" data-view="startup" title="Ctrl+7">
-            <svg viewBox="0 0 24 24"><path d="M12 3v8" /><path d="M6.4 6.6a8 8 0 1 0 11.2 0" /></svg>
-            <span>Startup apps</span>
-            <span class="nav-count" id="navStartupCount"></span>
-          </button>
-          <button class="nav-item" data-view="services" title="Ctrl+8">
-            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" /><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" /></svg>
-            <span>Services</span>
-            <span class="nav-count" id="navServicesCount"></span>
-          </button>
-          <button class="nav-item" data-view="history" title="Ctrl+9">
-            <svg viewBox="0 0 24 24"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1" /><path d="M3 4v4.5h4.5" /><path d="M12 7.5V12l3 2" /></svg>
-            <span>History</span>
-          </button>
-          <button class="nav-item" data-view="system" title="Ctrl+0">
-            <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="11" rx="1.5" /><path d="M2 19h20" /></svg>
-            <span>System</span>
-          </button>
-        </nav>
+        </div>
         <div class="sidebar-foot">
           <div class="foot-block">
             <div class="foot-label">Update speed</div>
@@ -81,18 +44,6 @@
               <button data-ms="0" title="Pause updates">Pause</button>
             </div>
           </div>
-          <div class="foot-block">
-            <div class="foot-label">Theme</div>
-            <div class="seg seg-sm" id="theme">
-              <button data-theme="system">Auto</button>
-              <button data-theme="light">Light</button>
-              <button data-theme="dark">Dark</button>
-            </div>
-          </div>
-          <label class="switch" data-tip="Hides your user name, PC name, network names and hardware IDs, for screenshots you want to share.">
-            <input type="checkbox" id="privacy" />
-            Hide personal info
-          </label>
           <div class="admin" id="admin"></div>
         </div>
       </aside>
@@ -101,8 +52,11 @@
           <h1 id="viewTitle">Overview</h1>
           <button class="topsearch" id="topSearch" type="button">
             <svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" /><path d="M20 20l-4.8-4.8" /></svg>
-            <span>Search processes, services, pages…</span>
+            <span class="ts-text">Search apps, services, pages…</span>
             <kbd>Ctrl K</kbd>
+          </button>
+          <button class="topbtn" id="topRun" type="button" data-tip="Run new task (Ctrl+N)">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>
           </button>
           <div class="top-stats" id="topStats"></div>
         </header>
@@ -116,12 +70,14 @@
         <section class="view" id="view-services"></section>
         <section class="view" id="view-history"></section>
         <section class="view" id="view-system"></section>
+        <section class="view" id="view-settings"></section>
       </main>
     </div>
     <div class="tooltip" id="tooltip"></div>
     <div id="modalRoot"></div>
     <div id="paletteRoot"></div>
-    <div class="toasts" id="toasts"></div>
+    <div id="menuRoot"></div>
+    <div class="toasts" id="toasts" role="status"></div>
     <div class="offline" id="offline" role="status">
       <div class="offline-msg">
         <span><span id="offlineText">Connection lost.</span> <span id="offlineCountdown" aria-hidden="true">Reconnecting…</span></span>
@@ -133,6 +89,8 @@
     <script src="js/util.js"></script>
     <script src="js/charts.js"></script>
     <script src="js/treemap.js"></script>
+    <script src="js/menu.js"></script>
+    <script src="js/actions.js"></script>
     <script src="js/views/overview.js"></script>
     <script src="js/views/processes.js"></script>
     <script src="js/views/memory.js"></script>
@@ -143,6 +101,7 @@
     <script src="js/views/services.js"></script>
     <script src="js/views/history.js"></script>
     <script src="js/views/system.js"></script>
+    <script src="js/views/settings.js"></script>
     <script src="js/palette.js"></script>
     <script src="js/app.js"></script>
   </body>

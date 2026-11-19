@@ -65,6 +65,38 @@ $out | ConvertTo-Json -Depth 4 -Compress
 
 const expand = (s) => (s || '').replace(/%([^%]+)%/g, (all, name) => process.env[name] || all);
 
+// Turning an entry on or off the way Task Manager and Settings do: a StartupApproved flag for
+// Run keys and Startup folders (first byte 2 = on, 3 = off, then when it was turned off), the
+// State value for Store apps (2 = on, 1 = off by the user), or the scheduled task itself.
+const TOGGLE = `
+$kind = $env:SL_KIND; $on = $env:SL_ON -eq '1'
+try {
+  if ($kind -eq 'approved') {
+    $key = $env:SL_KEY
+    if (-not (Test-Path -LiteralPath $key)) { New-Item -Path $key -Force -ErrorAction Stop | Out-Null }
+    $bytes = New-Object byte[] 12
+    if ($on) { $bytes[0] = 2 } else { $bytes[0] = 3; [BitConverter]::GetBytes([DateTime]::UtcNow.ToFileTimeUtc()).CopyTo($bytes, 4) }
+    New-ItemProperty -LiteralPath $key -Name $env:SL_NAME -PropertyType Binary -Value $bytes -Force -ErrorAction Stop | Out-Null
+  } elseif ($kind -eq 'pkg') {
+    Set-ItemProperty -LiteralPath $env:SL_KEY -Name State -Value $(if ($on) { 2 } else { 1 }) -Type DWord -ErrorAction Stop
+  } elseif ($kind -eq 'task') {
+    $t = @(Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskPath -eq $env:SL_TPATH -and $_.TaskName -eq $env:SL_NAME })
+    if (-not $t.Count) { throw 'That scheduled task no longer exists.' }
+    if ($on) { $t | Enable-ScheduledTask -ErrorAction Stop | Out-Null } else { $t | Disable-ScheduledTask -ErrorAction Stop | Out-Null }
+  }
+  ConvertTo-Json -Compress @{ ok = $true }
+} catch { ConvertTo-Json -Compress @{ ok = $false; error = [string]$_.Exception.Message } }
+`;
+const APPROVED = 'Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved';
+const APPROVED_KEYS = {
+  user: `HKCU:\\${APPROVED}\\Run`,
+  machine: `HKLM:\\${APPROVED}\\Run`,
+  machine32: `HKLM:\\${APPROVED}\\Run32`,
+  'folder:user': `HKCU:\\${APPROVED}\\StartupFolder`,
+  'folder:all users': `HKLM:\\${APPROVED}\\StartupFolder`,
+};
+const PKG_BASE = 'HKCU:\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\SystemAppData';
+
 class StartupService {
   constructor() {
     this.cache = null;
@@ -107,6 +139,8 @@ class StartupService {
                 command: r.cmd,
                 exe: exeOf(expand(r.cmd)),
                 enabled: approved(r.state),
+                machine: r.hive !== 'user',
+                toggle: { kind: 'approved', key: APPROVED_KEYS[r.hive], name: r.name },
               }),
             );
           }
@@ -122,6 +156,8 @@ class StartupService {
                 exe: target && /\.exe$/i.test(target) ? target : null,
                 file: f.file,
                 enabled: approved(f.state),
+                machine: f.scope !== 'user',
+                toggle: { kind: 'approved', key: APPROVED_KEYS[`folder:${f.scope}`], name: path.basename(f.file) },
               }),
             );
           }
@@ -139,6 +175,7 @@ class StartupService {
               publisher: '',
               description: '',
               policy: p.state === 3 || p.state === 4,
+              toggle: p.state === 3 || p.state === 4 ? null : { kind: 'pkg', key: `${PKG_BASE}\\${p.pkg}\\${p.task}` },
             });
           }
           for (const t of [].concat(raw.tasks || [])) {
@@ -153,6 +190,7 @@ class StartupService {
                 exe: path.isAbsolute(exe) ? exe : null,
                 enabled: t.state !== 'Disabled',
                 publisher: t.author || '',
+                toggle: { kind: 'task', tpath: t.folder, name: t.name },
               }),
             );
           }
@@ -165,6 +203,23 @@ class StartupService {
         });
     }
     return this.loading;
+  }
+
+  /** Turn one entry on or off. Only entries from the current list can be changed. */
+  async setEnabled(id, on) {
+    if (typeof id !== 'string') return { ok: false, error: 'Unknown entry' };
+    const data = await this.list(false);
+    const item = data.list.find((x) => x.id === id);
+    if (!item) return { ok: false, error: 'That entry no longer exists' };
+    if (!item.toggle) return { ok: false, error: item.policy ? 'Set by your organization’s policy' : 'Can’t be changed here' };
+    const t = item.toggle;
+    const vars = { SL_KIND: t.kind, SL_ON: on ? '1' : '0', SL_KEY: t.key || '', SL_NAME: t.name || '', SL_TPATH: t.tpath || '' };
+    const r = await runPowerShellJson(TOGGLE, 60000, vars);
+    this.cache = null; // re-read on the next request
+    if (!r) return { ok: false, error: 'Windows didn’t answer' };
+    if (r.ok) return { ok: true };
+    const denied = /not allowed|denied|unauthorized/i.test(r.error || '');
+    return { ok: false, error: denied ? 'Needs administrator rights' : String(r.error || 'Windows refused').trim() };
   }
 }
 

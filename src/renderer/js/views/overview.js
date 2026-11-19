@@ -1,5 +1,5 @@
 'use strict';
-/* global U, Charts, App */
+/* global U, Charts, App, syslens, Actions, StartupView */
 
 const Overview = (() => {
   let root;
@@ -33,7 +33,7 @@ const Overview = (() => {
           <div class="chart-frame"><canvas class="mid-chart" id="ov-ram-chart"></canvas></div>
         </div>
         <div class="card">
-          <div class="card-title">Findings <span class="sub">checked every second</span></div>
+          <div class="card-title">Findings <span class="sub" id="ov-find-sub">checked every second</span></div>
           <div class="insights" id="ov-insights"></div>
         </div>
       </div>
@@ -62,6 +62,13 @@ const Overview = (() => {
       const row = e.target.closest('[data-group]');
       if (row) App.go('processes', { group: row.dataset.group, sort: row.dataset.sortby });
       if (e.target.closest('[data-history]')) App.go('history');
+      const end = e.target.closest('[data-end-group]');
+      if (end && App.snap) {
+        const g = App.snap.groups.find((x) => x.key === end.dataset.endGroup);
+        if (g) Actions.endTask(Actions.fromGroup(g));
+      }
+      const ws = e.target.closest('[data-winsettings]');
+      if (ws) syslens.openSettings(ws.dataset.winsettings);
     });
   }
 
@@ -71,16 +78,84 @@ const Overview = (() => {
   const ACTIVITY = new Set(['boot', 'shutdown', 'unexpected', 'wake', 'sleep', 'crash', 'hang', 'bsod', 'update', 'install', 'service']);
   const GLYPH = { boot: 'power', shutdown: 'power', unexpected: 'warn', wake: 'wake', sleep: 'sleep', crash: 'crash', hang: 'hang', bsod: 'crash', update: 'update', install: 'install', service: 'service' };
 
+  let historySummary = null;
   async function loadActivity() {
     if (Date.now() - activityAt < 120000) return;
     activityAt = Date.now();
     try {
       const h = await syslens.history(false);
       activity = h.list.filter((e) => ACTIVITY.has(e.kind)).slice(0, 7);
+      historySummary = h.summary ? { ...h.summary, failedUpdates: new Set(h.list.filter((e) => e.kind === 'update-failed').map((e) => e.title)).size } : null;
     } catch {
       activity = [];
     }
     renderActivity();
+  }
+
+  // Only the few facts findings need are kept, not the whole machine report.
+  let machineFacts = null;
+  let factsAt = 0;
+  async function loadFacts() {
+    if (Date.now() - factsAt < 10 * 60000) return;
+    factsAt = Date.now();
+    if (!StartupView.data) StartupView.load(false);
+    try {
+      let m = await syslens.machine(false);
+      if (m && m.pending && m.pending.length) {
+        await new Promise((r) => setTimeout(r, 20000));
+        m = await syslens.machine(false);
+      }
+      const hw = (m && m.hardware) || {};
+      const win = (m && m.windows) || {};
+      const sec = win.security || {};
+      const batt = (hw.batteries || []).find((b) => b.health != null);
+      machineFacts = {
+        batteryHealth: batt ? batt.health : null,
+        antivirusOff: Array.isArray(sec.antivirus) && sec.antivirus.length > 0 && !sec.antivirus.some((a) => a.on),
+        antivirusOld: Array.isArray(sec.antivirus) && sec.antivirus.some((a) => a.on && a.current === false),
+        firewallOff: Array.isArray(sec.firewall) && sec.firewall.length > 0 && sec.firewall.every((x) => !x.enabled) && !(sec.firewallProducts || []).some((x) => x.on),
+      };
+    } catch {
+      factsAt = Date.now() - 9 * 60000; // try again in a minute
+    }
+  }
+
+  /** Findings from the event logs, startup list and machine report (the server adds live ones). */
+  function slowFindings() {
+    const out = [];
+    const add = (level, title, text, extra = {}) => out.push({ level, title, text, ...extra });
+    const h = historySummary;
+    if (h) {
+      if (h.bsods) add('bad', `Windows crashed with a blue screen ${h.bsods === 1 ? 'once' : `${h.bsods} times`} this week`, 'A blue screen is almost always a driver or hardware problem. History shows the stop code, which tells you where to start looking.', { link: 'history', linkLabel: 'Show history' });
+      if (h.unexpected) add('warn', `${h.unexpected === 1 ? 'An unexpected shutdown' : `${h.unexpected} unexpected shutdowns`} this week`, 'Windows was switched off without shutting down: power loss, a held power button, or a freeze.', { link: 'history', linkLabel: 'Show history' });
+      const crasher = (h.topCrashers || []).find((c) => c.n >= 3 && c.app);
+      if (crasher) add('warn', `${crasher.app} crashed or froze ${crasher.n} times this week`, 'Updating or reinstalling it usually helps. History lists each time.', { link: 'history', linkLabel: 'Show history' });
+      if (h.failedUpdates) add('warn', `${h.failedUpdates === 1 ? 'A Windows update' : `${h.failedUpdates} Windows updates`} failed to install`, 'Windows Update retries on its own, but repeated failures leave the PC without security fixes.', { winsettings: 'update', linkLabel: 'Windows Update' });
+      if (h.serviceCrashes >= 3) add('info', `Services stopped unexpectedly ${h.serviceCrashes} times this week`, 'Usually harmless once in a while; the same service over and over points to a broken app or driver.', { link: 'history', linkLabel: 'Show history' });
+    }
+    const su = StartupView.data;
+    if (su) {
+      const on = su.list.filter((x) => x.enabled).length;
+      if (on >= 12) add('info', `${on} apps start with Windows`, 'Each one slows sign-in a little and keeps running in the background. Switch off the ones you don’t need right away.', { link: 'startup', linkLabel: 'Startup apps' });
+    }
+    const m = machineFacts;
+    if (m) {
+      if (m.antivirusOff) add('bad', 'No antivirus is turned on', 'Windows Security reports that real-time protection is off.', { winsettings: 'security', linkLabel: 'Windows Security' });
+      else if (m.antivirusOld) add('warn', 'Antivirus definitions are out of date', 'Your antivirus is on but hasn’t updated recently.', { winsettings: 'security', linkLabel: 'Windows Security' });
+      if (m.firewallOff) add('bad', 'The firewall is off', 'Every Windows Firewall profile is turned off and no other firewall is on.', { winsettings: 'security', linkLabel: 'Windows Security' });
+      if (m.batteryHealth != null && m.batteryHealth < 80) add(m.batteryHealth < 65 ? 'warn' : 'info', `The battery holds ${m.batteryHealth.toFixed(0)}% of its original charge`, 'Batteries wear with use. Below about 80% you’ll notice shorter battery life; System shows the details.', { link: 'system', linkLabel: 'Battery health' });
+    }
+    return out;
+  }
+
+  const RANK = { bad: 0, warn: 1, info: 2 };
+  function findingHtml(i) {
+    const buttons = [];
+    if (i.group) buttons.push(`<button class="link" data-go="processes" data-group="${U.esc(i.group)}">Show</button>`);
+    else if (i.link) buttons.push(`<button class="link" data-go="${i.link}">${U.esc(i.linkLabel || 'Show')}</button>`);
+    if (i.winsettings) buttons.push(`<button class="link" data-winsettings="${i.winsettings}">${U.esc(i.linkLabel || 'Open')}</button>`);
+    if (i.group && i.level !== 'info' && i.group !== 'syslens') buttons.push(`<button class="link danger" data-end-group="${U.esc(i.group)}">End task</button>`);
+    return `<div class="insight ${i.level}"${i.group ? ` data-ctx-group="${U.esc(i.group)}"` : ''}>${U.LEVEL_ICONS[i.level]}<div><div class="t">${U.esc(i.title)}</div><div class="d">${U.esc(i.text)}</div>${buttons.length ? `<div class="go">${buttons.join('')}</div>` : ''}</div></div>`;
   }
 
   function renderActivity() {
@@ -98,8 +173,14 @@ const Overview = (() => {
       : '<div class="empty">Nothing notable this week.</div>';
   }
 
+  let factsTimer = null;
   function show() {
     loadActivity();
+    // The slower checks wait a little, so opening SysLens stays quick.
+    clearTimeout(factsTimer);
+    factsTimer = setTimeout(() => {
+      if (App.current === 'overview') loadFacts();
+    }, 6000);
   }
 
   function set(id, html) {
@@ -190,18 +271,15 @@ const Overview = (() => {
     });
     set('ov-ram-max', U.bytes(mem.total));
 
-    // Insights
+    // Findings: live ones from the server plus the slower checks (event logs, startup, security).
+    const findings = [...s.insights, ...slowFindings()].sort((a, b) => RANK[a.level] - RANK[b.level]);
+    const bad = findings.filter((i) => i.level !== 'info').length;
+    set('ov-find-sub', findings.length ? `${bad ? `${bad} to look at · ` : ''}${findings.length} in all` : 'checked every second');
     set(
       'ov-insights',
-      s.insights.length
-        ? s.insights
-            .map(
-              (i) => `<div class="insight ${i.level}">${U.LEVEL_ICONS[i.level]}<div><div class="t">${U.esc(i.title)}</div><div class="d">${U.esc(i.text)}</div>${
-                i.link ? `<div class="go"><button class="link" data-go="${i.link}">Show</button></div>` : ''
-              }</div></div>`,
-            )
-            .join('')
-        : '<div class="insight info">' + U.LEVEL_ICONS.info + '<div><div class="t">Nothing needs attention</div><div class="d">No memory pressure, runaway processes or leaks right now.</div></div></div>',
+      findings.length
+        ? findings.map(findingHtml).join('')
+        : '<div class="insight info">' + U.LEVEL_ICONS.info + '<div><div class="t">Nothing needs attention</div><div class="d">No memory pressure, runaway processes, leaks, crashes, full drives or security problems right now.</div></div></div>',
     );
     loadActivity();
 

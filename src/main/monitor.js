@@ -5,7 +5,7 @@ const { EventEmitter } = require('events');
 const w = require('./win32');
 const { PdhQuery } = require('./pdh');
 const { ProcessMonitor } = require('./processes');
-const { buildInsights } = require('./insights');
+const { buildInsights, Trends } = require('./insights');
 
 const COUNTERS = {
   'cpu.total': '\\Processor Information(_Total)\\% Processor Utility',
@@ -89,6 +89,9 @@ class Monitor extends EventEmitter {
     this.activeNets = new Set();
     this.latest = null;
     this.tick = 0;
+    this.trends = new Trends();
+    this.volumes = [];
+    this.volumesAt = 0;
   }
 
   setSystemInfo(sys) {
@@ -439,7 +442,17 @@ class Monitor extends EventEmitter {
       groups,
       hist: this.history.series,
     };
-    snapshot.insights = buildInsights(snapshot);
+    // Free space is cheap to read but changes slowly: once a minute is plenty.
+    if (Date.now() - this.volumesAt > 60000) {
+      this.volumesAt = Date.now();
+      try {
+        this.volumes = w.fixedVolumes();
+      } catch {
+        this.volumes = [];
+      }
+    }
+    this.trends.update(groups);
+    snapshot.insights = buildInsights(snapshot, { trends: this.trends, volumes: this.volumes });
     return snapshot;
   }
 }

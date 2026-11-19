@@ -29,6 +29,12 @@ const CRITICAL = new Set([
   'lsass.exe', 'lsaiso.exe', 'memory compression', 'secure system', 'fontdrvhost.exe',
 ]);
 
+// Pausing these freezes the desktop, typing, sound or the services SysLens itself relies on.
+const NO_SUSPEND = new Set(['dwm.exe', 'svchost.exe', 'sihost.exe', 'ctfmon.exe', 'textinputhost.exe', 'conhost.exe', 'audiodg.exe', 'wudfhost.exe', 'lsm.exe']);
+// Efficiency mode on these makes the whole PC feel sluggish (Task Manager refuses them too).
+const NO_ECO = new Set(['dwm.exe', 'audiodg.exe', 'csrss.exe']);
+const PRIORITY_NAMES = { idle: 'Low', below: 'Below normal', normal: 'Normal', above: 'Above normal', high: 'High' };
+
 // Helper processes that are better attributed to the app hosting them.
 const HOSTED = new Set(['msedgewebview2.exe']);
 
@@ -79,6 +85,7 @@ class ProcessMonitor {
     this.current = new Map(); // pid -> process record (latest sample)
     this.selfPids = new Set([process.pid]); // SysLens's own Node processes (server, launcher)
     this.selfBrowsers = []; // pids of the app window's main browser process (not its helpers)
+    this.eco = new Set(); // keys of processes SysLens put into efficiency mode
   }
 
   queryRaw() {
@@ -170,6 +177,12 @@ class ProcessMonitor {
         const ioWrite = Number(buf.readBigInt64LE(off + 0xf0));
         const ioOther = Number(buf.readBigInt64LE(off + 0xf8));
         const key = `${pid}:${createTime}`;
+        // Paused when every thread waits with reason "Suspended" (state 5, wait reason 5): done by
+        // SysLens, a debugger, or Windows itself for Store apps in the background.
+        let suspended = threads > 0;
+        for (let t = 0, o = off + 0x100; suspended && t < threads; t++, o += 0x50) {
+          if (o + 0x4c > buf.length || buf.readUInt32LE(o + 0x44) !== 5 || buf.readUInt32LE(o + 0x48) !== 5) suspended = false;
+        }
         const prev = this.prev.get(pid);
         let cpu = 0;
         let rRate = 0;
@@ -211,6 +224,7 @@ class ProcessMonitor {
           ioO: oRate,
           io: rRate + wRate + oRate,
           ioTotal: ioRead + ioWrite + ioOther,
+          suspended,
         });
       }
       if (!next) break;
@@ -220,6 +234,7 @@ class ProcessMonitor {
     for (const pid of this.prev.keys()) if (!seen.has(pid)) this.prev.delete(pid);
     const alive = new Set(list.map((p) => p.key));
     for (const k of this.meta.keys()) if (!alive.has(k)) this.meta.delete(k);
+    for (const k of this.eco) if (!alive.has(k)) this.eco.delete(k);
 
     // Metadata: path + command line once per process; version info with a per-tick budget
     // (generous on the first sample so names are right from the start).
@@ -254,6 +269,7 @@ class ProcessMonitor {
       p.windows = this.windows.get(p.pid) || null;
       p.isWindows = !!special || (m.path ? m.path.toLowerCase().startsWith(WINDOWS_DIR) : false);
       p.critical = CRITICAL.has(lower);
+      p.eco = this.eco.has(p.key);
       // SysLens itself: its Node processes and its app window's browser processes.
       const ownBrowser = !!m.cmd && m.cmd.toLowerCase().includes(SELF_PROFILE_MARK);
       p.isSelf = this.selfPids.has(p.pid) || ownBrowser;
@@ -339,9 +355,13 @@ class ProcessMonitor {
           hasWindows: false,
           allWindowsDir: true,
           critical: false,
+          suspended: true,
+          eco: false,
         };
         groups.set(p.group, g);
       }
+      g.suspended = g.suspended && p.suspended;
+      g.eco = g.eco || p.eco;
       g.pids.push(p.pid);
       g.count++;
       g.cpu += p.cpu;
@@ -422,6 +442,107 @@ class ProcessMonitor {
       parents: chain,
       children,
     };
+  }
+
+  /** The live process a { pid, key } target names, or why it can't be acted on. */
+  target(pid, key) {
+    const p = this.current.get(pid);
+    if (!p || (key && p.key !== key)) return { error: 'Process already exited' };
+    return { p };
+  }
+
+  /** Apply fn(process) to each target; fn returns { ok, error }. */
+  each(targets, fn) {
+    return targets.map(({ pid, key }) => {
+      const t = this.target(pid, key);
+      if (t.error) return { pid, ok: false, error: t.error };
+      try {
+        return { pid, ...fn(t.p) };
+      } catch (err) {
+        return { pid, ok: false, error: String((err && err.message) || err) };
+      }
+    });
+  }
+
+  /** Everything started by `pid` (children, grandchildren…), deepest first. */
+  descendants(pid) {
+    const kids = new Map();
+    for (const c of this.current.values()) {
+      if (c.pid === c.ppid) continue;
+      if (!kids.has(c.ppid)) kids.set(c.ppid, []);
+      kids.get(c.ppid).push(c);
+    }
+    const out = [];
+    const walk = (id, depth) => {
+      if (depth > 32) return;
+      for (const c of kids.get(id) || []) {
+        if (!this.isParent(id, c.pid)) continue; // a recycled PID, not a real child
+        walk(c.pid, depth + 1);
+        out.push(c);
+      }
+    };
+    walk(pid, 0);
+    return out;
+  }
+
+  /** End each target and every process it started. SysLens's own processes are left alone. */
+  killTree(targets) {
+    const seen = new Set();
+    const list = [];
+    for (const { pid, key } of targets) {
+      const t = this.target(pid, key);
+      if (t.error) continue;
+      for (const c of this.descendants(pid)) {
+        if (c.isSelf || seen.has(c.pid)) continue;
+        seen.add(c.pid);
+        list.push({ pid: c.pid, key: c.key });
+      }
+      if (!seen.has(pid)) {
+        seen.add(pid);
+        list.push({ pid, key: t.p.key });
+      }
+    }
+    return this.kill(list);
+  }
+
+  setPriority(targets, level) {
+    if (!PRIORITY_NAMES[level]) return [];
+    return this.each(targets, (p) => {
+      if (p.critical) return { ok: false, error: 'Critical Windows process' };
+      const r = w.setPriority(p.pid, level);
+      const m = this.meta.get(p.key);
+      if (r.ok && m) m.priority = PRIORITY_NAMES[level];
+      return r;
+    });
+  }
+
+  /** Efficiency mode (EcoQoS + low priority), as Task Manager does it. */
+  setEfficiency(targets, on) {
+    return this.each(targets, (p) => {
+      if (p.critical || NO_ECO.has(p.exe)) return { ok: false, error: 'Efficiency mode isn’t available for this process' };
+      const r = w.setEfficiency(p.pid, !!on);
+      if (r.ok) {
+        if (on) this.eco.add(p.key);
+        else this.eco.delete(p.key);
+        const m = this.meta.get(p.key);
+        if (m) m.priority = on ? 'Low' : 'Normal';
+      }
+      return r;
+    });
+  }
+
+  /** Pause or resume every thread of a process (like Resource Monitor's "Suspend process"). */
+  suspend(targets, on) {
+    return this.each(targets, (p) => {
+      if (on && (p.critical || p.isSelf || NO_SUSPEND.has(p.exe))) return { ok: false, error: 'Pausing this would freeze Windows or SysLens' };
+      return w.suspend(p.pid, !!on);
+    });
+  }
+
+  /** Windows Explorer processes in this sign-in session (the taskbar, desktop and folders). */
+  explorers() {
+    const self = this.current.get(process.pid);
+    return [...this.current.values()].filter((p) => p.exe === 'explorer.exe' && (!self || p.session === self.session));
   }
 
   /** End processes. Each target is { pid, key } so a recycled PID is never killed by mistake. */

@@ -1,5 +1,5 @@
 'use strict';
-/* global U, App, syslens */
+/* global U, App, syslens, Menu, Actions, Charts, ServicesView */
 
 const Processes = (() => {
   let root;
@@ -16,6 +16,7 @@ const Processes = (() => {
 
   const st = {
     mode: 'grouped',
+    modeFrom: null, // the "Default view" setting the mode was last taken from
     filter: 'all',
     q: '',
     sort: { key: 'priv', dir: -1 },
@@ -29,18 +30,43 @@ const Processes = (() => {
 
   const COLS = [
     { key: 'name', label: 'Name' },
-    { key: 'pid', label: 'PID', width: 74, flat: true },
-    { key: 'cpu', label: 'CPU', width: 78 },
-    { key: 'priv', label: 'Memory', width: 100, tip: 'Private working set — RAM only this app uses.\nSame number as Task Manager’s Memory column.' },
-    { key: 'gpu', label: 'GPU', width: 68 },
-    { key: 'gpuMem', label: 'GPU memory', width: 100, tip: 'Shared + dedicated GPU memory this app has mapped.\nIncludes surfaces shared with other apps (the desktop compositor maps every window), so rows can add up to more than the total.' },
-    { key: 'io', label: 'Disk & I/O', width: 98, tip: 'Read + write + other I/O per second.\nIncludes file, network and device I/O.' },
-    { key: 'handles', label: 'Handles', width: 82 },
-    { key: 'threads', label: 'Threads', width: 74 },
+    { key: 'status', label: 'Status', width: 100, left: true, tip: 'Suspended: paused, using no processor time.\nEfficiency mode: low priority on power-efficient cores.' },
+    { key: 'pid', label: 'PID', width: 70, flat: true },
+    { key: 'cpu', label: 'CPU', width: 72 },
+    { key: 'priv', label: 'Memory', width: 94, tip: 'Private working set — RAM only this app uses.\nSame number as Task Manager’s Memory column.' },
+    { key: 'gpu', label: 'GPU', width: 62 },
+    { key: 'gpuMem', label: 'GPU memory', width: 96, tip: 'Shared + dedicated GPU memory this app has mapped.\nIncludes surfaces shared with other apps (the desktop compositor maps every window), so rows can add up to more than the total.' },
+    { key: 'io', label: 'Disk & I/O', width: 92, tip: 'Read + write + other I/O per second.\nIncludes file, network and device I/O.' },
+    { key: 'handles', label: 'Handles', width: 76 },
+    { key: 'threads', label: 'Threads', width: 70 },
+    { key: 'priority', label: 'Priority', width: 104, left: true },
+    { key: 'started', label: 'Running for', width: 100, tip: 'How long ago it started' },
+    { key: 'publisher', label: 'Publisher', width: 160, left: true },
   ];
+  const PRIO_RANK = { Low: 1, 'Below normal': 2, Normal: 3, 'Above normal': 4, High: 5, Realtime: 6 };
+  const LEAF = '<svg class="st-ico" viewBox="0 0 24 24"><path d="M5 19c0-8 5-13 14-14 0 9-5 14-13 14z"/><path d="M5 19c3-4 6-6 9-8"/></svg>';
+  const PAUSE = '<svg class="st-ico" viewBox="0 0 24 24"><rect x="6.5" y="5" width="3.5" height="14" rx="1"/><rect x="14" y="5" width="3.5" height="14" rx="1"/></svg>';
+
+  /** The processes behind an app row. */
+  const membersOf = (g) => g.pids.map((pid) => procByPid.get(pid)).filter(Boolean);
+  function priorityOf(r) {
+    if (r.pid) return r.priority || '';
+    const set = new Set(membersOf(r).map((p) => p.priority).filter(Boolean));
+    return set.size === 1 ? [...set][0] : set.size ? 'Mixed' : '';
+  }
+  function startedOf(r) {
+    if (r.pid) return r.created || 0;
+    let t = 0;
+    for (const p of membersOf(r)) if (p.created && (!t || p.created < t)) t = p.created;
+    return t;
+  }
 
   const VAL = {
     name: (r) => (r.name && !r.pid ? r.name : r.display || r.name || '').toLowerCase(),
+    status: (r) => (r.suspended ? 2 : r.eco ? 1 : 0),
+    priority: (r) => PRIO_RANK[priorityOf(r)] || 0,
+    started: (r) => -(startedOf(r) || 0),
+    publisher: (r) => (r.company || '~').toLowerCase(),
     pid: (r) => r.pid || 0,
     cpu: (r) => r.cpu,
     priv: (r) => r.priv,
@@ -52,6 +78,13 @@ const Processes = (() => {
   };
 
   const FMT = {
+    status: (r) => (r.suspended ? `<span class="st paused">${PAUSE}Suspended</span>` : r.eco ? `<span class="st eco" data-tip="Efficiency mode">${LEAF}Efficiency</span>` : ''),
+    priority: (r) => U.esc(priorityOf(r)),
+    started: (r) => {
+      const t = startedOf(r);
+      return t ? U.span(Date.now() - t) : '';
+    },
+    publisher: (r) => U.esc(r.company || ''),
     pid: (r) => (r.pid ? r.pid : ''),
     cpu: (r) => (r.cpu >= 0.05 ? `${r.cpu.toFixed(1)}%` : '0%'),
     priv: (r) => U.bytes(r.priv),
@@ -70,7 +103,11 @@ const Processes = (() => {
     io: (r) => U.heat(r.io, 20 * U.MB),
   };
 
-  const visibleCols = () => COLS.filter((c) => !c.flat || st.mode !== 'grouped');
+  function visibleCols() {
+    const hidden = new Set((App.settings && App.settings.hiddenColumns) || []);
+    return COLS.filter((c) => c.key === 'name' || ((!c.flat || st.mode !== 'grouped') && !hidden.has(c.key)));
+  }
+  const heatOn = () => !App.settings || App.settings.heat !== false;
 
   function init(el) {
     root = el;
@@ -88,7 +125,8 @@ const Processes = (() => {
             </div>
             <div id="pr-filters" style="display:flex;gap:6px"></div>
             <div class="spacer"></div>
-            <button class="btn danger" id="pr-end" disabled>End task</button>
+            <button class="btn danger" id="pr-end" disabled title="End task (Delete)">End task</button>
+            <button class="btn" id="pr-more" title="More actions">More ▾</button>
           </div>
           <div class="table-wrap" id="pr-wrap"><table class="grid-table"><colgroup id="pr-cols"></colgroup><thead id="pr-head"></thead><tbody id="pr-body"></tbody></table></div>
           <div class="status-line" id="pr-status"></div>
@@ -134,13 +172,25 @@ const Processes = (() => {
       const tr = e.target.closest('tr[data-k]');
       if (tr && tr.dataset.t) toggle(tr.dataset.t);
     });
-    U.$('#pr-end').addEventListener('click', endSelected);
+    U.$('#pr-end').addEventListener('click', () => endSelected());
+    U.$('#pr-more').addEventListener('click', (e) => Menu.openAt({ target: e.currentTarget }, toolbarMenu()));
+    body.addEventListener('contextmenu', (e) => {
+      const tr = e.target.closest('tr[data-k]');
+      if (!tr) return;
+      if (selKey() !== tr.dataset.k) select(tr.dataset.k);
+      const item = selectedItem();
+      if (item) Menu.openAt(e, Actions.processMenu(item, rowExtras()));
+    });
+    U.$('#pr-head').addEventListener('contextmenu', (e) => Menu.openAt(e, columnsMenu()));
     U.$('#pr-drawer').addEventListener('click', (e) => {
       if (e.target.closest('[data-close]')) {
         st.sel = null;
         renderAll();
       } else if (e.target.closest('[data-end]')) {
         endSelected();
+      } else if (e.target.closest('[data-actions]')) {
+        const item = selectedItem();
+        if (item) Menu.openAt({ target: e.target.closest('[data-actions]') }, Actions.processMenu(item, rowExtras()));
       } else if (e.target.closest('[data-loc]')) {
         syslens.showItem(e.target.closest('[data-loc]').dataset.loc);
       } else if (e.target.closest('[data-pick]')) {
@@ -190,7 +240,7 @@ const Processes = (() => {
   function cells(r) {
     return visibleCols()
       .filter((c) => c.key !== 'name')
-      .map((c) => `<td ${HEAT[c.key] ? HEAT[c.key](r) : ''}>${FMT[c.key](r)}</td>`)
+      .map((c) => `<td${c.left ? ' class="l"' : ''} ${HEAT[c.key] && heatOn() ? HEAT[c.key](r) : ''}>${FMT[c.key](r)}</td>`)
       .join('');
   }
 
@@ -318,12 +368,21 @@ const Processes = (() => {
     const cols = visibleCols();
     const colsHtml = cols.map((c) => `<col style="width:${c.width ? `${c.width}px` : 'auto'}">`).join('');
     const colEl = U.$('#pr-cols');
-    if (colEl.innerHTML !== colsHtml) colEl.innerHTML = colsHtml;
+    if (colEl.innerHTML !== colsHtml) {
+      colEl.innerHTML = colsHtml;
+      colEl.parentElement.style.minWidth = `${cols.reduce((sum, c) => sum + (c.width || 0), 0) + 200}px`;
+    }
     const gpuMax = Math.max(0, ...snap.gpus.map((g) => g.util));
     const totalIo = snap.procs.reduce((s, p) => s + p.io, 0);
     const gpuMem = snap.gpus.reduce((s, g) => s + g.shared + g.dedicated, 0);
+    const pausedN = snap.groups.filter((g) => g.suspended).length;
+    const ecoN = snap.groups.filter((g) => g.eco).length;
     const totals = {
       name: '',
+      status: [pausedN && `${pausedN} paused`, ecoN && `${ecoN} eco`].filter(Boolean).join(' · '),
+      priority: '',
+      started: '',
+      publisher: '',
       pid: '',
       cpu: `${snap.cpu.total.toFixed(0)}%`,
       priv: `${Math.round((snap.mem.inUse / snap.mem.total) * 100)}%`,
@@ -337,7 +396,7 @@ const Processes = (() => {
       .map((c) => {
         const on = st.sort.key === c.key;
         const arrow = on ? `<span class="arrow">${st.sort.dir > 0 ? '▲' : '▼'}</span>` : '';
-        return `<th data-sort="${c.key}" class="${on ? 'sorted' : ''}" ${c.tip ? `data-tip="${U.esc(c.tip)}"` : ''}><span class="total">${totals[c.key] || '&nbsp;'}</span>${c.label}${arrow}</th>`;
+        return `<th data-sort="${c.key}" class="${on ? 'sorted' : ''}${c.left ? ' l' : ''}" ${c.tip ? `data-tip="${U.esc(c.tip)}"` : ''}><span class="total">${totals[c.key] || '&nbsp;'}</span>${c.label}${arrow}</th>`;
       })
       .join('')}</tr>`;
   }
@@ -533,7 +592,7 @@ const Processes = (() => {
         <div class="drawer-head">${U.icon(g.path, g.type === 'windows' ? U.WIN_ICON : undefined)}<div><div class="title">${U.esc(g.name)}</div>
           <div class="subtitle">${g.count} processes · ${U.esc(g.exe)}${g.company ? ` · ${U.esc(g.company)}` : ''}</div></div>
           <button class="btn ghost sm x" data-close title="Close">✕</button></div>
-        <div class="drawer-actions"><button class="btn danger sm" data-end ${g.critical ? 'disabled' : ''}>End task (${g.count} processes)</button>${
+        <div class="drawer-actions"><button class="btn danger sm" data-end ${g.critical ? 'disabled' : ''}>End task (${g.count} processes)</button><button class="btn sm" data-actions>More ▾</button>${
           g.path ? `<button class="btn sm" data-loc="${U.esc(g.path)}">Open file location</button>` : ''
         }</div>
         ${sparksBlock()}
@@ -565,7 +624,7 @@ const Processes = (() => {
         <div class="drawer-head">${U.icon(p.path, p.isWindows ? U.WIN_ICON : undefined)}<div><div class="title">${U.esc(p.display)}</div>
           <div class="subtitle">${U.esc(p.name)} · PID ${p.pid}${p.company ? ` · ${U.esc(p.company)}` : ''}</div></div>
           <button class="btn ghost sm x" data-close title="Close">✕</button></div>
-        <div class="drawer-actions"><button class="btn danger sm" data-end ${p.critical ? 'disabled' : ''}>End process</button>${
+        <div class="drawer-actions"><button class="btn danger sm" data-end ${p.critical ? 'disabled' : ''}>End task</button><button class="btn sm" data-actions>More ▾</button>${
           p.path && !p.pathGuessed ? `<button class="btn sm" data-loc="${U.esc(p.path)}">Open file location</button>` : ''
         }</div>
         ${p.critical ? '<div class="notice warn"><svg viewBox="0 0 24 24"><path d="M1 21h22L12 2zm12-3h-2v-2h2zm0-4h-2v-4h2z"/></svg><div>Critical Windows process — ending it would crash Windows, so SysLens won’t.</div></div>' : ''}
@@ -587,9 +646,9 @@ const Processes = (() => {
         <section><h4>Process</h4>${kv([
           p.role && ['Role', U.esc(p.role)],
           ['Started', p.created ? `${U.date(p.created)} <span class="faint">(${U.ago(p.created)})</span>` : 'At boot'],
-          ['Priority', U.esc(p.priority || '—')],
+          ['Priority', `${U.esc(p.priority || '—')}${p.eco ? ' <span class="st eco">' + LEAF + 'Efficiency mode</span>' : ''}${p.suspended ? ' <span class="st paused">' + PAUSE + 'Suspended</span>' : ''}`],
           ['Session', p.session === 0 ? '0 (services)' : String(p.session)],
-          d && d.pid === p.pid && d.user && ['User', U.esc(d.user)],
+          d && d.pid === p.pid && d.user && ['User', U.esc(App.settings && App.settings.fullAccount ? d.user : d.user.split('\\').pop())],
           d && d.pid === p.pid && d.integrity && ['Integrity', `${U.esc(d.integrity)}${d.elevated ? ' <span class="faint">· running as administrator</span>' : ''}`],
           d && d.pid === p.pid && d.arch && ['Architecture', U.esc(d.arch)],
           parents.length && ['Started by', parents.map((x) => `<button class="link" data-pick="${x.pid}">${U.esc(x.display)}</button>`).join(' ← ')],
@@ -610,51 +669,96 @@ const Processes = (() => {
     drawSparks();
   }
 
-  async function endSelected() {
-    if (!st.sel || !snap) return;
-    let targets;
-    let name;
-    let critical;
+  /** The selected row as an action target. */
+  function selectedItem() {
+    if (!st.sel || !snap) return null;
     if (st.sel.kind === 'group') {
       const g = groupByKey.get(st.sel.key);
-      if (!g) return;
-      targets = g.pids.map((pid) => procByPid.get(pid)).filter(Boolean);
-      name = g.name;
-      critical = g.critical;
-    } else {
-      const p = procByPid.get(st.sel.pid);
-      if (!p) return;
-      targets = [p];
-      name = p.display;
-      critical = p.critical;
+      return g ? Actions.fromGroup(g) : null;
     }
-    if (critical) {
-      U.toast(`${name} is a critical Windows process. Ending it would crash Windows, so SysLens won't.`, 'warn');
-      return;
+    const p = procByPid.get(st.sel.pid);
+    return p ? Actions.fromProc(p) : null;
+  }
+
+  function rowExtras() {
+    const extra = [];
+    if (st.sel && st.sel.kind === 'group') {
+      const open = st.expanded.has(st.sel.key);
+      extra.push({ label: open ? 'Collapse' : 'Expand', icon: 'list', kbd: 'Enter', run: () => toggle(st.sel.key) });
     }
-    const n = targets.length;
-    const ok = await U.confirm({
-      title: `End ${name}?`,
-      body:
-        n > 1
-          ? `This ends all <b>${n}</b> processes of ${U.esc(name)}, freeing about <b>${U.bytes(targets.reduce((s, p) => s + p.priv, 0))}</b>. Unsaved work will be lost.`
-          : `This ends PID ${targets[0].pid}, freeing about <b>${U.bytes(targets[0].priv)}</b>. Unsaved work in it will be lost.`,
-      confirmLabel: n > 1 ? `End ${n} processes` : 'End process',
-      danger: true,
-    });
-    if (!ok) return;
-    const res = await syslens.kill(targets.map((p) => ({ pid: p.pid, key: p.key })));
-    const okN = res.filter((r) => r.ok).length;
-    const failed = res.filter((r) => !r.ok);
-    if (!failed.length) {
-      U.toast(`Ended ${okN} process${okN === 1 ? '' : 'es'} of ${name}.`, 'good');
-    } else {
-      const reasons = [...new Set(failed.map((f) => f.error))].join('; ');
-      const hint = /Access denied/.test(reasons) && !snap.admin ? ' Run SysLens as administrator to end it.' : '';
-      U.toast(`${okN ? `Ended ${okN}, but ` : ''}${failed.length} couldn't be ended: ${reasons}.${hint}`, 'bad', 8000);
+    if (st.sel && st.sel.kind === 'proc' && st.mode !== 'tree') {
+      const pid = st.sel.pid;
+      extra.push({ label: 'Show in tree', icon: 'tree', run: () => showInTree(pid) });
     }
-    st.sel = null;
+    return extra;
+  }
+
+  function showInTree(pid) {
+    st.mode = 'tree';
+    st.q = '';
+    U.$('#pr-q').value = '';
+    st.collapsed.clear();
+    select(`p:${pid}`);
     renderAll();
+    requestAnimationFrame(() => {
+      const row = U.$(`#pr-body tr[data-k="p:${pid}"]`);
+      if (row) row.scrollIntoView({ block: 'center' });
+    });
+  }
+
+  function columnsMenu() {
+    const hidden = new Set((App.settings && App.settings.hiddenColumns) || []);
+    const flip = (key) => {
+      const next = new Set(hidden);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      App.saveSettings({ hiddenColumns: [...next] });
+    };
+    return [
+      ...COLS.filter((c) => c.key !== 'name').map((c) => ({ label: c.label, checked: !hidden.has(c.key), hint: c.flat ? 'not in By app' : '', run: () => flip(c.key) })),
+      '-',
+      { label: 'Reset columns', icon: 'restart', run: () => App.saveSettings({ hiddenColumns: ['priority', 'started', 'publisher'] }) },
+    ];
+  }
+
+  function toolbarMenu() {
+    const groups = snap ? snap.groups.filter((g) => g.count > 1) : [];
+    return [
+      { label: 'Run new task…', icon: 'start', kbd: 'Ctrl+N', run: () => Actions.runTask() },
+      { label: 'Restart Windows Explorer', icon: 'restart', run: () => Actions.restartExplorer() },
+      '-',
+      st.mode === 'grouped' && { label: 'Expand all', icon: 'down', run: () => (groups.forEach((g) => st.expanded.add(g.key)), renderTable()) },
+      st.mode === 'grouped' && { label: 'Collapse all', icon: 'up', run: () => (st.expanded.clear(), renderTable()) },
+      { label: 'Copy this list', icon: 'copy', tip: 'Tab-separated: pastes straight into Excel', run: copyList },
+      { label: 'Columns', icon: 'list', sub: columnsMenu() },
+      '-',
+      { label: 'Open Task Manager', icon: 'window', run: () => syslens.openSettings('taskmgr') },
+      { label: 'Open Resource Monitor', icon: 'gauge', run: () => syslens.openSettings('resmon') },
+    ].filter(Boolean);
+  }
+
+  /** The rows on screen, tab-separated with a header, for pasting into a spreadsheet. */
+  function copyList() {
+    const cols = visibleCols();
+    const lines = [cols.map((c) => c.label).join('\t')];
+    const strip = (html) => String(html).replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+    for (const k of order) {
+      const r = k.startsWith('g:') ? groupByKey.get(k.slice(2)) : procByPid.get(Number(k.slice(2)));
+      if (!r) continue;
+      const name = r.pid ? r.display || r.name : r.name;
+      lines.push(cols.map((c) => (c.key === 'name' ? name : strip(FMT[c.key](r)))).join('\t'));
+    }
+    U.copy(lines.join('\n'), `${lines.length - 1} rows copied`);
+  }
+
+  async function endSelected(tree = false) {
+    const item = selectedItem();
+    if (!item) return;
+    const done = await Actions.endTask(item, { tree });
+    if (done) {
+      st.sel = null;
+      renderAll();
+    }
   }
 
   function onKey(e) {
@@ -671,7 +775,15 @@ const Processes = (() => {
       e.preventDefault();
       U.$('#pr-q').focus();
     } else if (e.key === 'Delete') {
-      endSelected();
+      endSelected(e.shiftKey);
+    } else if ((e.key === 'F10' && e.shiftKey) || e.key === 'ContextMenu') {
+      e.preventDefault();
+      const item = selectedItem();
+      const row = item && U.$(`#pr-body tr[data-k="${CSS.escape(selKey())}"]`);
+      if (item && row) Menu.openAt({ target: row.querySelector('.nm') || row }, Actions.processMenu(item, rowExtras()));
+    } else if (e.ctrlKey && e.key.toLowerCase() === 'c' && st.sel && !String(window.getSelection() || '')) {
+      const item = selectedItem();
+      if (item) U.copy(item.name, 'Name copied');
     } else if (e.key === 'Escape') {
       st.sel = null;
       renderAll();
@@ -692,6 +804,12 @@ const Processes = (() => {
 
   function render(s) {
     snap = s;
+    const want = App.settings && App.settings.processView;
+    if (want && st.modeFrom !== want) {
+      st.modeFrom = want;
+      st.mode = want;
+      if (st.mode === 'grouped' && st.sort.key === 'pid') st.sort = { key: 'priv', dir: -1 };
+    }
     reindex();
     trackSelected();
     U.$$('#pr-mode button').forEach((b) => b.classList.toggle('on', b.dataset.mode === st.mode));
@@ -708,7 +826,10 @@ const Processes = (() => {
       st.filter = 'all';
       reindex();
       const g = groupByKey.get(opts.group);
-      if (g) select(g.count === 1 ? `p:${g.pids[0]}` : `g:${g.key}`);
+      if (g && opts.pid && g.count > 1 && g.pids.includes(opts.pid)) {
+        st.expanded.add(g.key);
+        select(`p:${opts.pid}`);
+      } else if (g) select(g.count === 1 ? `p:${g.pids[0]}` : `g:${g.key}`);
       requestAnimationFrame(() => {
         const row = U.$(`#pr-body tr[data-k="${CSS.escape(selKey() || '')}"]`);
         if (row) row.scrollIntoView({ block: 'center' });
@@ -716,5 +837,15 @@ const Processes = (() => {
     }
   }
 
-  return { init, render, show, onKey, title: 'Processes' };
+  function hide() {
+    const b = U.$('#pr-body');
+    if (b) b.innerHTML = '';
+    const d = U.$('#pr-drawer');
+    if (d) {
+      d.innerHTML = '';
+      drawerSelKey = null;
+    }
+  }
+
+  return { init, render, show, hide, onKey, title: 'Processes' };
 })();

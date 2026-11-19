@@ -30,6 +30,18 @@ const api = {
   GetLastError: kernel32.func('uint32 __stdcall GetLastError()'),
   IsWow64Process2: kernel32.func('int __stdcall IsWow64Process2(intptr_t h, _Out_ uint16 *processMachine, _Out_ uint16 *nativeMachine)'),
   GetSystemPowerStatus: kernel32.func('int __stdcall GetSystemPowerStatus(void *status)'),
+  SetPriorityClass: kernel32.func('int __stdcall SetPriorityClass(intptr_t h, uint32 cls)'),
+  SetProcessInformation: kernel32.func('int __stdcall SetProcessInformation(intptr_t h, int cls, void *info, uint32 size)'),
+  NtSuspendProcess: ntdll.func('int32 __stdcall NtSuspendProcess(intptr_t h)'),
+  NtResumeProcess: ntdll.func('int32 __stdcall NtResumeProcess(intptr_t h)'),
+
+  // user32: bringing the SysLens window forward, keeping it on top
+  ShowWindow: user32.func('int __stdcall ShowWindow(intptr_t hwnd, int cmd)'),
+  IsIconic: user32.func('int __stdcall IsIconic(intptr_t hwnd)'),
+  SetForegroundWindow: user32.func('int __stdcall SetForegroundWindow(intptr_t hwnd)'),
+  SetWindowPos: user32.func('int __stdcall SetWindowPos(intptr_t hwnd, intptr_t after, int x, int y, int cx, int cy, uint32 flags)'),
+  keybd_event: user32.func('void __stdcall keybd_event(uint8 vk, uint8 scan, uint32 flags, uintptr_t extra)'),
+  PostMessageW: user32.func('int __stdcall PostMessageW(intptr_t hwnd, uint32 msg, uintptr_t wparam, intptr_t lparam)'),
 
   // advapi32: process tokens
   OpenProcessToken: advapi32.func('int __stdcall OpenProcessToken(intptr_t h, uint32 access, _Out_ intptr_t *token)'),
@@ -377,6 +389,112 @@ function powerStatus() {
   };
 }
 
+// ---------- process actions ----------
+const PROCESS_SET_INFORMATION = 0x0200;
+const PROCESS_SUSPEND_RESUME = 0x0800;
+const PRIORITY_CLASSES = { idle: 0x40, below: 0x4000, normal: 0x20, above: 0x8000, high: 0x80 };
+
+/** Run fn(handle) on a process opened with `access`; returns { ok, error }. */
+function withProcess(pid, access, fn) {
+  const h = api.OpenProcess(access, 0, pid);
+  if (!h) return { ok: false, error: errorText(api.GetLastError()) };
+  try {
+    return fn(h);
+  } finally {
+    api.CloseHandle(h);
+  }
+}
+
+function setPriority(pid, level) {
+  const cls = PRIORITY_CLASSES[level];
+  if (!cls) return { ok: false, error: 'Unknown priority' };
+  return withProcess(pid, PROCESS_SET_INFORMATION, (h) => (api.SetPriorityClass(h, cls) ? { ok: true } : { ok: false, error: errorText(api.GetLastError()) }));
+}
+
+/**
+ * Efficiency mode, as in Task Manager: EcoQoS (the scheduler prefers efficient cores and lower
+ * clocks for it) plus idle priority. Off restores normal priority and default throttling.
+ */
+function setEfficiency(pid, on) {
+  return withProcess(pid, PROCESS_SET_INFORMATION, (h) => {
+    const state = Buffer.alloc(12);
+    state.writeUInt32LE(1, 0); // PROCESS_POWER_THROTTLING_CURRENT_VERSION
+    state.writeUInt32LE(on ? 1 : 0, 4); // ControlMask: EXECUTION_SPEED (0 = let Windows decide)
+    state.writeUInt32LE(on ? 1 : 0, 8); // StateMask
+    if (!api.SetProcessInformation(h, 4 /* ProcessPowerThrottling */, state, 12)) return { ok: false, error: errorText(api.GetLastError()) };
+    api.SetPriorityClass(h, on ? PRIORITY_CLASSES.idle : PRIORITY_CLASSES.normal);
+    return { ok: true };
+  });
+}
+
+function suspend(pid, on) {
+  return withProcess(pid, PROCESS_SUSPEND_RESUME, (h) => {
+    const st = (on ? api.NtSuspendProcess(h) : api.NtResumeProcess(h)) >>> 0;
+    return st === 0 ? { ok: true } : { ok: false, error: `NTSTATUS 0x${st.toString(16)}` };
+  });
+}
+
+/** Restore and bring a window to the front, even from a background process. */
+function focusWindow(hwnd) {
+  if (api.IsIconic(hwnd)) api.ShowWindow(hwnd, 9 /* SW_RESTORE */);
+  // Windows only lets the foreground app hand focus around; a synthetic Alt press makes this
+  // process count as having received input, which is the documented way past that lock.
+  api.keybd_event(0x12, 0, 0, 0);
+  const ok = api.SetForegroundWindow(hwnd);
+  api.keybd_event(0x12, 0, 2 /* KEYEVENTF_KEYUP */, 0);
+  return !!ok;
+}
+
+function setTopmost(hwnd, on) {
+  // HWND_TOPMOST = -1, HWND_NOTOPMOST = -2; SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+  return !!api.SetWindowPos(hwnd, on ? -1 : -2, 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0010);
+}
+
+/** Ask a window to close, as its close button would (WM_CLOSE). */
+function closeWindow(hwnd) {
+  return !!api.PostMessageW(hwnd, 0x0010, 0, 0);
+}
+
+function minimizeWindow(hwnd) {
+  return !!api.ShowWindow(hwnd, 6 /* SW_MINIMIZE */);
+}
+
+/** Free and total space of each fixed drive (cheap: one call per drive). */
+function fixedVolumes() {
+  const out = [];
+  const mask = api.GetLogicalDrives();
+  for (let i = 2; i < 26; i++) {
+    if (!(mask & (1 << i))) continue;
+    const root = `${String.fromCharCode(65 + i)}:\\`;
+    if (api.GetDriveTypeW(root) !== 3 /* DRIVE_FIXED */) continue;
+    const avail = [0];
+    const total = [0];
+    const free = [0];
+    if (api.GetDiskFreeSpaceExW(root, avail, total, free)) out.push({ root, free: Number(avail[0]), total: Number(total[0]) });
+  }
+  return out;
+}
+
+/** Visible top-level windows with a title: [{ hwnd, pid, title }]. */
+function topWindows() {
+  const out = [];
+  const pid = [0];
+  const tbuf = Buffer.alloc(1024);
+  api.EnumWindows((hwnd) => {
+    try {
+      if (!api.IsWindowVisible(hwnd) || api.GetWindow(hwnd, 4)) return 1;
+      const n = api.GetWindowTextW(hwnd, tbuf, 500);
+      if (n <= 0) return 1;
+      api.GetWindowThreadProcessId(hwnd, pid);
+      out.push({ hwnd, pid: pid[0], title: tbuf.toString('utf16le', 0, n * 2) });
+    } catch {
+      /* keep going */
+    }
+    return 1;
+  }, 0);
+  return out;
+}
+
 /** Raw GetExtendedTcpTable / GetExtendedUdpTable buffer, or null. */
 function endpointTable(kind, family) {
   const fn = kind === 'tcp' ? api.GetExtendedTcpTable : api.GetExtendedUdpTable;
@@ -418,6 +536,15 @@ module.exports = {
   processArch,
   powerStatus,
   endpointTable,
+  setPriority,
+  setEfficiency,
+  suspend,
+  focusWindow,
+  setTopmost,
+  closeWindow,
+  minimizeWindow,
+  fixedVolumes,
+  topWindows,
   errorText,
   STATUS_INFO_LENGTH_MISMATCH,
   PROCESS_TERMINATE,

@@ -167,8 +167,14 @@ const HistoryView = (() => {
     U.$('#hi-events').innerHTML = html || '<div class="empty">No events match.</div>';
   }
 
+  function hide() {
+    const el = U.$('#hi-events');
+    if (el) el.innerHTML = '';
+  }
+
   return {
     init,
+    hide,
     render: () => {},
     show,
     load,

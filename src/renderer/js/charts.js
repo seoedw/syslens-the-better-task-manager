@@ -40,7 +40,8 @@ const Charts = (() => {
       observer.observe(canvas);
       canvas._observed = true;
     }
-    const dpr = window.devicePixelRatio || 1;
+    // The interface size setting scales the page (CSS zoom): draw at that resolution too.
+    const dpr = (window.devicePixelRatio || 1) * U.zoom();
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
     if (!w || !h) return 0;

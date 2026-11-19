@@ -4,7 +4,35 @@
 
 const path = require('path');
 const w = require('./win32');
-const { runPowerShellJson } = require('./powershell');
+const { runPowerShellJson, run } = require('./powershell');
+
+// Start, stop or restart one service, found by its exact name (no wildcards). Waits for the
+// service to get there, like the Services console does.
+const CONTROL = `
+$n = $env:SYSLENS_SVC; $a = $env:SYSLENS_ACT
+try {
+  $s = Get-Service | Where-Object { $_.Name -eq $n } | Select-Object -First 1
+  if (-not $s) { throw 'That service no longer exists.' }
+  if ($a -eq 'start') { Start-Service -InputObject $s -ErrorAction Stop }
+  elseif ($a -eq 'stop') { Stop-Service -InputObject $s -ErrorAction Stop }
+  elseif ($a -eq 'restart') { Restart-Service -InputObject $s -ErrorAction Stop }
+  $s.Refresh()
+  ConvertTo-Json -Compress @{ ok = $true; state = [string]$s.Status }
+} catch {
+  $m = [string]$_.Exception.Message
+  if ($_.Exception.InnerException) { $m = [string]$_.Exception.InnerException.Message }
+  ConvertTo-Json -Compress @{ ok = $false; error = $m }
+}
+`;
+const START_TYPES = { auto: 'auto', delayed: 'delayed-auto', manual: 'demand', disabled: 'disabled' };
+
+function friendlyError(msg) {
+  const m = String(msg || '');
+  if (/access is denied|cannot open .* service|PermissionDenied/i.test(m)) return 'Needs administrator rights';
+  if (/dependent services/i.test(m)) return 'Other running services depend on it; stop those first';
+  if (/disabled/i.test(m)) return 'The service is disabled; set its startup type first';
+  return m.replace(/\s+/g, ' ').trim() || 'Windows refused';
+}
 
 const SYSTEM_ROOT = (process.env.SystemRoot || 'C:\\Windows').toLowerCase();
 
@@ -97,6 +125,34 @@ class ServicesService {
         });
     }
     return this.loading;
+  }
+
+  /** Only names from the current list are accepted, so nothing else can be passed through. */
+  async known(name) {
+    if (typeof name !== 'string' || !name || name.length > 256) return null;
+    const data = await this.list(false);
+    return data.list.find((s) => s.name === name) || null;
+  }
+
+  async control(name, action) {
+    if (!['start', 'stop', 'restart'].includes(action)) return { ok: false, error: 'Unknown action' };
+    const svc = await this.known(name);
+    if (!svc) return { ok: false, error: 'That service no longer exists' };
+    const r = await runPowerShellJson(CONTROL, 90000, { SYSLENS_SVC: svc.name, SYSLENS_ACT: action });
+    this.at = 0; // re-read on the next request
+    if (!r) return { ok: false, error: 'Timed out waiting for the service' };
+    return r.ok ? { ok: true, state: r.state } : { ok: false, error: friendlyError(r.error) };
+  }
+
+  async setStartType(name, type) {
+    const mode = START_TYPES[type];
+    if (!mode) return { ok: false, error: 'Unknown startup type' };
+    const svc = await this.known(name);
+    if (!svc) return { ok: false, error: 'That service no longer exists' };
+    const r = await run('sc.exe', ['config', svc.name, 'start=', mode]);
+    this.at = 0;
+    if (r.code === 0 && /SUCCESS/i.test(r.out)) return { ok: true };
+    return { ok: false, error: /\b5\b|denied/i.test(r.out) ? 'Needs administrator rights' : friendlyError(r.out.replace(/^\[SC\][^:]*:?\s*/, '')) };
   }
 }
 

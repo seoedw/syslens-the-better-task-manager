@@ -57,12 +57,6 @@
     for (const [re, to] of masks) text = text.replace(re, to);
     return text;
   }
-  // Applied before the first byte of data arrives, so nothing is ever shown unmasked.
-  try {
-    if (localStorage.getItem('privacy') === '1') setPrivacy(true, JSON.parse(localStorage.getItem('privacy-names') || '{}'));
-  } catch {
-    /* storage unavailable */
-  }
 
   async function invoke(channel, ...args) {
     const res = await fetch('/api/call', {
@@ -148,15 +142,6 @@
       if (!payload.hist && !hist) return;
       payload = unpack(payload);
     }
-    if (event === 'handoff' && payload && payload.token) {
-      // An administrator instance is taking over: switch tokens and reconnect.
-      token = payload.token;
-      try {
-        sessionStorage.setItem(KEY, token);
-      } catch {
-        /* ignore */
-      }
-    }
     emit(event, payload);
   }
 
@@ -224,6 +209,7 @@
       attemptAt = Date.now();
       emit('retry', { at: 0, failures });
       try {
+        if (!booted) await boot(ctrl.signal);
         const res = await fetch('/api/events', {
           headers: { 'X-SysLens-Token': token, 'X-SysLens-Page': PAGE_ID },
           cache: 'no-store',
@@ -286,14 +272,37 @@
     }).catch(() => {});
   });
 
-  const media = matchMedia('(prefers-color-scheme: dark)');
-  let themeSource = 'system';
-  const effectiveTheme = () => (themeSource === 'system' ? (media.matches ? 'dark' : 'light') : themeSource);
-  media.addEventListener('change', () => emit('theme', effectiveTheme()));
+  // Settings and the names "Hide personal info" masks come first, before any data: nothing is
+  // ever shown unmasked. ?privacy=1 (used for README screenshots) forces masking on.
+  const forcedPrivacy = new URLSearchParams(location.search).get('privacy') === '1';
+  let booted = null;
+  let resolveReady;
+  const ready = new Promise((resolve) => {
+    resolveReady = resolve;
+  });
+  /** First contact: settings and names to mask. Retried by the stream loop until it works. */
+  async function boot(signal) {
+    const res = await fetch('/api/call', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-SysLens-Token': token },
+      body: JSON.stringify({ channel: 'app:boot', args: [] }),
+      cache: 'no-store',
+      signal,
+    });
+    if (res.status === 403) emit('auth-failed', true);
+    if (!res.ok) throw new Error(`boot ${res.status}`);
+    const text = await res.text();
+    const raw = JSON.parse(text);
+    if (raw.settings.privacy || forcedPrivacy) setPrivacy(true, { user: raw.info.user, host: raw.info.host });
+    // The boot answer itself (folder paths, names) gets the same masking as everything else.
+    booted = JSON.parse(unmask(text));
+    resolveReady(booted);
+  }
 
   window.syslens = {
+    ready,
+    token: () => token,
     onSnapshot: (cb) => on('snapshot', cb),
-    onTheme: (cb) => on('theme', cb),
     onConnection: (cb) => on('connection', cb),
     onRetry: (cb) => on('retry', cb),
     onAuthFailed: (cb) => on('auth-failed', cb),
@@ -305,23 +314,39 @@
     connections: (opts) => invoke('net:connections', opts || {}),
     adapters: (refresh) => invoke('net:adapters', !!refresh),
     services: (refresh) => invoke('services:list', !!refresh),
+    serviceControl: (name, action) => invoke('svc:control', name, action),
+    serviceStartType: (name, type) => invoke('svc:startType', name, type),
     startup: (refresh) => invoke('startup:list', !!refresh),
+    startupToggle: (id, on) => invoke('startup:toggle', id, !!on),
     history: (refresh) => invoke('history:get', !!refresh),
     openLog: () => invoke('app:openLog'),
+    openData: () => invoke('app:openData'),
+    changelog: () => invoke('app:changelog'),
+    setHotkey: (combo) => invoke('app:hotkey', combo),
     setInterval: (ms) => invoke('interval', ms),
     setVisible: (visible) => invoke('app:visible', visible),
     need: (what) => invoke('app:need', what),
     details: (pid) => invoke('proc:details', pid),
     kill: (targets) => invoke('proc:kill', targets),
+    killTree: (targets) => invoke('proc:killTree', targets),
+    priority: (targets, level) => invoke('proc:priority', targets, level),
+    efficiency: (targets, on) => invoke('proc:efficiency', targets, !!on),
+    suspend: (targets, on) => invoke('proc:suspend', targets, !!on),
+    switchTo: (pids) => invoke('proc:switchTo', pids),
+    restartExplorer: () => invoke('proc:restartExplorer'),
+    runTask: (command, admin) => invoke('task:run', command, !!admin),
     icon: (path) => invoke('icon', path),
     showItem: (path) => invoke('shell:showItem', path),
     openFolder: (path) => invoke('shell:openFolder', path),
     openSettings: (page) => invoke('shell:settings', page),
+    search: (text) => invoke('shell:search', text),
     info: () => invoke('app:info'),
     elevate: () => invoke('app:elevate'),
-    setTheme: async (source) => {
-      themeSource = source;
-      return effectiveTheme();
+    settings: {
+      get: () => invoke('settings:get'),
+      set: (patch) => invoke('settings:set', patch),
+      reset: () => invoke('settings:reset'),
+      background: (dataUrl) => invoke('settings:background', dataUrl),
     },
     storage: {
       drives: () => invoke('storage:drives'),

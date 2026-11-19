@@ -15,16 +15,98 @@ const RANK = { bad: 0, warn: 1, info: 2 };
 // Windows bookkeeping, not apps: never call these "the biggest app".
 const NOT_APPS = new Set(['memory compression', 'system', 'registry', 'secure system']);
 
+const MB = 1024 ** 2;
+
 function gb(bytes) {
   const v = bytes / GB;
   if (v < 1) return `${Math.round(bytes / 1024 ** 2)} MB`;
   return `${v >= 10 ? v.toFixed(0) : v.toFixed(1)} GB`;
 }
 
-function buildInsights(s) {
+/**
+ * Memory of each sizeable app every 15 s for the last 10 minutes, to spot one that keeps
+ * growing: the usual sign of a leak. About 150 apps x 41 numbers, so it costs next to nothing.
+ */
+class Trends {
+  constructor() {
+    this.at = 0;
+    this.series = new Map(); // group key -> [priv…]
+    this.names = new Map();
+  }
+
+  update(groups, now = Date.now()) {
+    if (now - this.at < 15000) return;
+    this.at = now;
+    const live = new Set();
+    for (const g of groups) {
+      if (g.priv < 150 * MB || g.key === 'syslens' || NOT_APPS.has(g.exe)) continue;
+      live.add(g.key);
+      let s = this.series.get(g.key);
+      if (!s) this.series.set(g.key, (s = []));
+      s.push(g.priv);
+      if (s.length > 41) s.shift();
+      this.names.set(g.key, g.name);
+    }
+    for (const k of this.series.keys()) {
+      if (!live.has(k)) {
+        this.series.delete(k);
+        this.names.delete(k);
+      }
+    }
+  }
+
+  /** Apps that grew a lot, almost without pause, over at least five minutes. */
+  growing() {
+    const out = [];
+    for (const [key, s] of this.series) {
+      if (s.length < 21) continue;
+      const grew = s[s.length - 1] - s[0];
+      let steady = 0;
+      for (let i = 1; i < s.length; i++) if (s[i] >= s[i - 1] - 2 * MB) steady++;
+      if (grew > 400 * MB && grew > s[0] * 0.3 && steady / (s.length - 1) > 0.85) {
+        out.push({ key, name: this.names.get(key), grew, minutes: Math.round(((s.length - 1) * 15) / 60), now: s[s.length - 1] });
+      }
+    }
+    return out.sort((a, b) => b.grew - a.grew);
+  }
+}
+
+function buildInsights(s, extra = {}) {
   const out = [];
   const { mem, groups, procs } = s;
-  const add = (level, title, text, link) => out.push({ level, title, text, link: link || null });
+  const add = (level, title, text, link, extraFields) => out.push({ level, title, text, link: link || null, ...extraFields });
+
+  // ---- disks ----
+  for (const v of extra.volumes || []) {
+    if (!v.total) continue;
+    const share = v.free / v.total;
+    const drive = v.root.slice(0, 2);
+    if (share < 0.05 || v.free < 5 * GB) {
+      add('bad', `Drive ${drive} is almost full`, `Only ${gb(v.free)} of ${gb(v.total)} is free. Windows needs free space for updates, the page file and temporary files; when it runs out, apps fail to save and updates fail.`, 'storage');
+    } else if (share < 0.1 || v.free < 15 * GB) {
+      add('warn', `Drive ${drive} is running low on space`, `${gb(v.free)} of ${gb(v.total)} is free. The Storage page shows what is taking the space.`, 'storage');
+    }
+  }
+
+  // ---- heat and battery ----
+  const throttled = (s.temps || []).find((t) => t.limit != null && t.limit < 100);
+  const hot = (s.temps || []).find((t) => t.c >= 90);
+  if (throttled) {
+    add('warn', 'Your PC is slowing itself down to cool off', `Windows is holding the processor to ${throttled.limit.toFixed(0)}% of its speed (${throttled.c.toFixed(0)} °C). Check the vents aren’t blocked, and close heavy apps.`, 'performance');
+  } else if (hot) {
+    add('warn', `The processor is at ${hot.c.toFixed(0)} °C`, 'That is hot. Sustained heat makes the processor slow down and shortens battery life; make sure the vents are clear.', 'performance');
+  }
+  const b = s.battery;
+  if (b && b.hasBattery && b.percent != null && !b.ac) {
+    if (b.percent <= 10) add('bad', `Battery is at ${b.percent}%`, 'Plug in soon: Windows will hibernate or shut down when it runs out.', 'performance');
+    else if (b.percent <= 20) add('warn', `Battery is at ${b.percent}%`, `About ${b.secondsLeft ? `${Math.round(b.secondsLeft / 60)} minutes` : 'a little while'} left at this rate.`, 'performance');
+  }
+
+  // ---- apps that keep growing ----
+  for (const g of (extra.trends && extra.trends.growing()) || []) {
+    const browser = BROWSERS.has((groups.find((x) => x.key === g.key) || {}).exe);
+    add(browser ? 'info' : 'warn', `${g.name} keeps using more memory`, `It grew by ${gb(g.grew)} in the last ${g.minutes} minutes (now ${gb(g.now)}) and hasn’t let go. ${browser ? 'New tabs do this; if you haven’t opened any, a page may be leaking.' : 'That pattern usually means a memory leak; restarting the app gives it back.'}`, 'processes', { group: g.key });
+  }
 
   const availPct = mem.available / mem.total;
   if (availPct < 0.08) {
@@ -82,16 +164,22 @@ function buildInsights(s) {
 
   const hog = groups.find((g) => g.cpu > 40 && !NOT_APPS.has(g.exe));
   if (hog) {
-    add('warn', `${hog.name} is using ${hog.cpu.toFixed(0)}% CPU`, 'If that is unexpected, check what it is doing or end it from the Processes page.', 'processes');
+    add('warn', `${hog.name} is using ${hog.cpu.toFixed(0)}% CPU`, 'If that is unexpected, check what it is doing or end it from the Processes page.', 'processes', { group: hog.key });
   }
 
   const top = groups.find((g) => !NOT_APPS.has(g.exe));
   if (top && top.priv > 0.12 * mem.total && !BROWSERS.has(top.exe)) {
-    add('info', `${top.name} is the biggest memory user`, `${gb(top.priv)} across ${top.count} process${top.count === 1 ? '' : 'es'}.`, 'processes');
+    add('info', `${top.name} is the biggest memory user`, `${gb(top.priv)} across ${top.count} process${top.count === 1 ? '' : 'es'}.`, 'processes', { group: top.key });
+  }
+
+  const paused = groups.filter((g) => g.suspended && g.type !== 'windows' && g.count > 0);
+  if (paused.length >= 1 && paused.some((g) => g.priv > 200 * MB)) {
+    const big = paused.filter((g) => g.priv > 200 * MB);
+    add('info', `${big.map((g) => g.name).slice(0, 2).join(' and ')} ${big.length === 1 ? 'is' : 'are'} paused but holding ${gb(big.reduce((n, g) => n + g.priv, 0))}`, 'Suspended apps use no processor time but keep their memory. End them if you’re not coming back to them.', 'processes', { group: big[0].key });
   }
 
   out.sort((a, b) => RANK[a.level] - RANK[b.level]);
   return out;
 }
 
-module.exports = { buildInsights };
+module.exports = { buildInsights, Trends };

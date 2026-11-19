@@ -67,6 +67,7 @@ const NetworkView = (() => {
       const s = e.target.closest('[data-settings]');
       if (s) syslens.openSettings(s.dataset.settings);
       if (e.target.closest('#nw-ad-refresh')) loadAdapters(true);
+      if (e.target.closest('[data-latency-on]')) App.saveSettings({ latency: true }).then(() => U.toast('Latency is measured every 5 seconds from now on. Turn it off in Settings.', 'good'));
       const app = e.target.closest('[data-pid]');
       if (app && App.snap) {
         const p = (App.snap.procs || []).find((x) => x.pid === Number(app.dataset.pid));
@@ -144,6 +145,8 @@ const NetworkView = (() => {
       sums.push(`<div class="sum"><div class="v" id="nw-up">${U.bits(net.sent)}</div><div class="k">Upload now</div></div>`);
     }
     sums.push(`<div class="sum"><div class="v">${connsAt ? U.num(est) : '—'}</div><div class="k">Connections open${connsAt ? ` · ${U.num(lis)} listening` : ''}</div></div>`);
+    if (s.latency) sums.push(`<div class="sum"><div class="v">${s.latency.ms == null ? 'Lost' : `${Math.round(s.latency.ms)} <small>ms</small>`}</div><div class="k">Internet latency · ${U.esc(s.latency.target)}</div></div>`);
+    else if (App.settings && !App.settings.latency) sums.push('<div class="sum"><div class="v"><button class="link" data-latency-on>Measure</button></div><div class="k">Internet latency (off)</div></div>');
     const html = sums.join('');
     const el = U.$('#nw-sum');
     if (el.innerHTML !== html) el.innerHTML = html;
@@ -234,7 +237,7 @@ const NetworkView = (() => {
           .map((l) => {
             const app = appOf(l, map);
             const where = l.scopes.map((x) => (/^(All networks|This PC only)$/.test(x) ? U.esc(x) : U.pii(x))).join(', ');
-            return `<tr class="hov"><td style="width:70px" class="mono">${l.port}</td><td><div class="appcell" data-pid="${l.pid}" style="cursor:pointer">${U.icon(app.path, app.isWindows ? U.WIN_ICON : undefined)}<span class="ellipsis">${U.esc(app.name)}</span></div></td><td class="faint ellipsis" style="width:38%">${[l.service && U.esc(l.service), where].filter(Boolean).join(' · ')}</td></tr>`;
+            return `<tr class="hov" data-cpid="${l.pid}" data-port="${l.port}"><td style="width:70px" class="mono">${l.port}</td><td><div class="appcell" data-pid="${l.pid}" style="cursor:pointer">${U.icon(app.path, app.isWindows ? U.WIN_ICON : undefined)}<span class="ellipsis">${U.esc(app.name)}</span></div></td><td class="faint ellipsis" style="width:38%">${[l.service && U.esc(l.service), where].filter(Boolean).join(' · ')}</td></tr>`;
           })
           .join('')}</tbody></table>`
       : '<div class="empty">Nothing is listening.</div>';
@@ -270,7 +273,7 @@ const NetworkView = (() => {
       .map(({ c, app }) => {
         const remote = c.proto === 'UDP' || c.state === 'Listening' ? `<span class="faint">${U.esc(scope(c.local))}</span>` : `${c.host ? `${U.esc(c.host)} <span class="faint">${U.esc(c.remote)}</span>` : U.esc(c.remote)}`;
         const portNum = c.state === 'Established' ? c.rport : c.lport;
-        return `<tr class="hov"><td><div class="appcell" data-pid="${c.pid}" style="cursor:pointer">${U.icon(app.path, app.isWindows ? U.WIN_ICON : undefined)}<span class="ellipsis">${U.esc(app.name)}</span></div></td>
+        return `<tr class="hov" data-cpid="${c.pid}" data-host="${U.esc(c.host || '')}" data-addr="${U.esc(c.state === 'Established' ? c.remote || '' : '')}" data-port="${portNum}"><td><div class="appcell" data-pid="${c.pid}" style="cursor:pointer">${U.icon(app.path, app.isWindows ? U.WIN_ICON : undefined)}<span class="ellipsis">${U.esc(app.name)}</span></div></td>
           <td class="ellipsis" title="${U.esc(c.host || c.remote)}">${remote}</td>
           <td class="mono">${portNum}${c.service ? ` <span class="faint" style="font-family:var(--font)">${U.esc(c.service)}</span>` : ''}</td>
           <td>${c.state ? U.esc(c.state) : '<span class="faint">—</span>'}</td>
@@ -290,5 +293,10 @@ const NetworkView = (() => {
     renderChart(s);
   }
 
-  return { init, render, show, title: 'Network' };
+  function hide() {
+    const t = U.$('#nw-table');
+    if (t) t.innerHTML = '';
+  }
+
+  return { init, render, show, hide, title: 'Network' };
 })();

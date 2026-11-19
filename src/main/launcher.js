@@ -10,10 +10,13 @@
 const { fork } = require('child_process');
 const path = require('path');
 const { createLogger } = require('./log');
+const { showExisting } = require('./instance');
 
 const SERVER = path.join(__dirname, 'server.js');
 const ARGS = process.argv.slice(2);
-const KEEP_ON_RESTART = /^--(debug|no-window|keep-alive)$/;
+const KEEP_ON_RESTART = /^--(debug|no-window|keep-alive|elevated)$/;
+// These always start a server of their own; anything else first looks for a running SysLens.
+const OWN_SERVER = /^--(new|no-window|keep-alive|elevated|port=.*)$/;
 const MAX_RESTARTS = 5; // within RESTART_WINDOW; past that, something is badly wrong
 const RESTART_WINDOW = 3 * 60 * 1000;
 const HANG_LIMIT = 60 * 1000; // no heartbeat for this long = the server is stuck
@@ -101,4 +104,17 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 
-start();
+// Opening SysLens while it runs (desktop shortcut, its keyboard shortcut, Start menu) brings
+// the open window to the front in a fraction of a second instead of starting a second copy.
+if (ARGS.some((a) => OWN_SERVER.test(a))) {
+  start();
+} else {
+  showExisting().then(
+    (shown) => {
+      if (!shown) return start();
+      log('already running; brought its window to the front');
+      process.exit(0);
+    },
+    () => start(),
+  );
+}

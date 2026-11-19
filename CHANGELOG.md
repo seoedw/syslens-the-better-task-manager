@@ -3,6 +3,12 @@
 Every SysLens release and what changed in it. SysLens shows the newest entry once after it
 updates (Settings › About › What’s new shows it again).
 
+## [Unreleased]
+
+### Fixed
+
+- SysLens opens at exactly Task Manager’s size and place on scaled screens; at 150% or 200% it could land a pixel off.
+
 ## [1.4.0] - 2026-11-19 (Beta)
 
 The first beta release: download **SysLens Beta 1.4.0** from the Releases page. It brings its own Node.js, so there's nothing else to install.

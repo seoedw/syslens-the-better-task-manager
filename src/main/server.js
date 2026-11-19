@@ -243,7 +243,7 @@ function taskManagerBounds() {
   }
 }
 
-let placement = null; // { bounds, until }: size the window like Task Manager's once it appears
+let placement = null; // { bounds, until, tries }: size the window like Task Manager's once it appears
 
 function openWindow() {
   const start = settings.get('windowStart');
@@ -253,22 +253,33 @@ function openWindow() {
     // Edge takes these in device-independent pixels; the exact pixels are set once the window shows.
     const scale = w.screenScale() || 1;
     size = { x: Math.round(bounds.x / scale), y: Math.round(bounds.y / scale), w: Math.round(bounds.w / scale), h: Math.round(bounds.h / scale) };
-    placement = { bounds, until: Date.now() + 20000 };
+    placement = { bounds, until: Date.now() + 20000, tries: 0 };
     placeSoon();
   }
   shellx.openAppWindow(appUrl(port, token), PROFILE_DIR, { elevated: ADMIN, start, size });
   windowOpenedAt = Date.now();
 }
 
-/** Put the new window exactly where Task Manager's would be (checks a few times a second). */
+/**
+ * Put the new window exactly where Task Manager's would be. Edge takes its starting size in whole
+ * points, so at 150% or 200% it can land a pixel off (201 px is 100.5 points); this sets the exact
+ * pixels once the window appears, then looks again in case Edge was still applying its own size.
+ */
 function placeSoon() {
   if (!placement) return;
   const win = ownWindows()[0];
   if (win) {
-    const now = w.windowRect(win.hwnd);
     const b = placement.bounds;
-    if (!now || Math.abs(now.x - b.x) > 2 || Math.abs(now.y - b.y) > 2 || Math.abs(now.w - b.w) > 2 || Math.abs(now.h - b.h) > 2) w.placeWindow(win.hwnd, b);
-    placement = null;
+    const now = w.windowRect(win.hwnd);
+    const exact = now && now.x === b.x && now.y === b.y && now.w === b.w && now.h === b.h;
+    // Done once it's exact, if it got maximized meanwhile, or after a few tries (never fight Edge).
+    if (exact || placement.tries >= 3 || w.api.IsZoomed(win.hwnd)) {
+      placement = null;
+      return;
+    }
+    w.placeWindow(win.hwnd, b);
+    placement.tries++;
+    setTimeout(placeSoon, 400);
     return;
   }
   if (Date.now() > placement.until) {

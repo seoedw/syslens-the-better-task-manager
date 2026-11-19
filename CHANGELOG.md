@@ -3,12 +3,6 @@
 Every SysLens release and what changed in it. SysLens shows the newest entry once after it
 updates (Settings › About › What’s new shows it again).
 
-## [Unreleased]
-
-### Fixed
-
-- SysLens opens at exactly Task Manager’s size and place on scaled screens; at 150% or 200% it could land a pixel off.
-
 ## [1.4.0] - 2026-11-19 (Beta)
 
 The first beta release: download **SysLens Beta 1.4.0** from the Releases page. It brings its own Node.js, so there's nothing else to install.
@@ -41,6 +35,7 @@ The first beta release: download **SysLens Beta 1.4.0** from the Releases page. 
 - Flush DNS asks for administrator permission, which Windows requires for it.
 - Opening an app from another page now selects it in Processes even when that page hasn’t been shown yet.
 - Driver, BIOS and graphics driver dates showed a day early in time zones west of UTC (Windows stores them in UTC); they now match Device Manager.
+- SysLens opens at exactly Task Manager’s size and place on scaled screens; at 150% or 200% it could land a pixel off.
 
 ## [1.3.0] - 2026-11-18
 

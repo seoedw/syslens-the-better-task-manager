@@ -537,7 +537,7 @@ const Processes = (() => {
     const rows = [...est, ...lis]
       .slice(0, 8)
       .map(
-        (c) => `<div class="conn-row"><span class="who"${c.host || c.remote ? ` title="${U.esc(c.host || c.remote)}"` : ''}>${c.state === 'Listening' ? `Listening on port ${c.lport}` : U.net(c.host || c.remote || null)}</span><span class="faint">${c.state === 'Listening' ? '' : `${c.rport}${c.service ? ` ${U.esc(c.service)}` : ''}`}</span></div>`,
+        (c) => `<div class="conn-row"><span class="who"${c.host || c.remote ? ` title="${U.esc(c.host || c.remote)}"` : ''}>${c.state === 'Listening' ? `Listening on port ${c.lport}` : !c.host && !c.remote && c.remoteScope === 'pc' ? 'This PC' : U.net(c.host || c.remote || null)}</span><span class="faint">${c.state === 'Listening' ? '' : `${c.rport}${c.service ? ` ${U.esc(c.service)}` : ''}`}</span></div>`,
       )
       .join('');
     return `<section><h4>Network <span class="faint">· ${est.length} connected${lis.length ? `, ${lis.length} listening` : ''}${list.length - est.length - lis.length > 0 ? `, ${list.length - est.length - lis.length} other` : ''}</span></h4>${rows}${

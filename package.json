@@ -1,7 +1,7 @@
 {
   "name": "syslens",
   "productName": "SysLens",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "private": true,
   "description": "SysLens, the better Task Manager for Windows: every process with Task Manager’s actions and more, where your RAM really goes, what fills your disk, what starts with Windows and what your PC did while you were away.",
   "homepage": "https://github.com/seoedw/syslens-the-better-task-manager#readme",

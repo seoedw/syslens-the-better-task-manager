@@ -275,9 +275,27 @@ function shapeAdapters(raw, wifi) {
 
 // ---------- hiding network details ----------
 // With "Hide network details" (or "Hide personal info") on, these never leave the server:
-// the window can't show what it never receives, so nothing can be read from it either.
-const LOCAL_SCOPES = new Set(['0.0.0.0', '::', '127.0.0.1', '::1']);
+// the window can't show what it never receives, so nothing can be read from it either. Not one
+// IP address goes across, not even 127.0.0.1: a port listening on every network or only for
+// this PC is sent as that fact ('any' or 'pc'), which the window shows in words.
 const isLoop = (ip) => /^127\.|^::1$|^::ffff:127\./.test(ip || '');
+const scopeOf = (ip) => (ip === '0.0.0.0' || ip === '::' || ip === '*' ? 'any' : isLoop(ip) ? 'pc' : null);
+
+// Addresses inside free text (command lines, window titles, startup commands, service paths).
+// IPv4 first, so an IPv4 address written inside an IPv6 one (::ffff:192.168.1.5) goes whole.
+// A four-part version number whose parts are all 255 or less looks exactly like an IPv4
+// address and is hidden too; versions with a bigger part (most of them) are left alone.
+const OCTET = '(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)';
+const IPV4_TEXT = new RegExp(`(?<![\\d.])(?:${OCTET}\\.){3}${OCTET}(?!\\d|\\.\\d)`, 'g');
+const HEX = '[0-9a-f]{1,4}';
+const IPV6_TEXT = new RegExp(`(?<![\\w:.])(?:(?:${HEX}:){7}${HEX}|(?:${HEX}:){1,7}:(?:${HEX}(?::${HEX}){0,6})?|::${HEX}(?::${HEX}){0,6})(?:%\\w+)?(?![\\w:.])`, 'gi');
+const MAC_TEXT = /(?<![\w:-])(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}(?![\w:-])/gi;
+const HIDDEN_TEXT = '[address hidden]';
+
+function scrubText(s) {
+  if (typeof s !== 'string' || !s) return s;
+  return s.replace(MAC_TEXT, HIDDEN_TEXT).replace(IPV4_TEXT, HIDDEN_TEXT).replace(IPV6_TEXT, HIDDEN_TEXT);
+}
 
 function redactAdapters(data) {
   if (!data || !Array.isArray(data.list)) return data;
@@ -303,11 +321,13 @@ function redactConnections(list) {
   return list.map((c) => ({
     ...c,
     loop: isLoop(c.remote) || (c.state === 'Listening' && isLoop(c.local)),
-    remote: c.remote && !LOCAL_SCOPES.has(c.remote) ? null : c.remote,
+    remote: null,
+    remoteScope: scopeOf(c.remote),
     host: null,
-    local: LOCAL_SCOPES.has(c.local) ? c.local : null,
+    local: null,
+    localScope: scopeOf(c.local),
     redacted: true,
   }));
 }
 
-module.exports = { NetworkService, isPublic, redactAdapters, redactConnections };
+module.exports = { NetworkService, isPublic, redactAdapters, redactConnections, scrubText };

@@ -3,6 +3,29 @@
 Every SysLens release and what changed in it. SysLens shows the newest entry once after it
 updates (Settings › About › What’s new shows it again).
 
+## [1.4.1] - 2026-11-19 (Beta)
+
+**It brings its own Node.js, so there's nothing else to install.** Download **SysLens Beta 1.4.1** from the Releases page.
+
+### Added
+
+- **Pinning SysLens pins SysLens.** Pin to taskbar used to pin Microsoft Edge (with an address that stopped working the next time SysLens started). The SysLens window now tells Windows it's SysLens, with its own name, icon and start command, and the Start menu and desktop shortcuts share its taskbar button.
+- With **Hide network details** off, the Network page lists every address of every adapter, including all IPv6 addresses and the link-local one.
+
+### Changed
+
+- With network details hidden, not one IP address reaches the window: a connection between two apps on this PC shows **This PC**, and a port open to every network shows **All networks**. Addresses inside command lines, window titles, startup commands and service paths are hidden too.
+- Turning **Hide network details** on or off reloads the window, so nothing shown before stays on any page.
+
+### Fixed
+
+- Turning on **Hide personal info** (or **Hide network details**) no longer sends you to the start page: you stay on the page you were on, scrolled where you were.
+
+### Security
+
+- A strict Content-Security-Policy on top of escaping everything shown: the window runs only SysLens's own script files (no inline code, no `eval`), can't be put in a frame, and other sites can't load anything from SysLens. Cross-origin and permissions policies too.
+- Tested by feeding hostile HTML through every name, title, path, command line and description SysLens shows, on every page, details panel, menu and search: none of it turned into page content.
+
 ## [1.4.0] - 2026-11-19 (Beta)
 
 The first beta release: download **SysLens Beta 1.4.0** from the Releases page. It brings its own Node.js, so there's nothing else to install.

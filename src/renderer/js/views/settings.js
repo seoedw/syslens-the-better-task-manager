@@ -93,9 +93,9 @@ const SettingsView = (() => {
     if (!pictures) return '<div class="faint">Loading your pictures…</div>';
     const tiles = pictures
       .map(
-        (p) => `<div class="pic${s.background === 'image' && s.backgroundImage === p.id ? ' on' : ''}" data-pic="${p.id}" title="Use this picture">
-          <img src="${syslens.pictures.url(p.id, true)}" alt="" loading="lazy" draggable="false">
-          <button class="pic-x" data-pic-remove="${p.id}" title="Remove this picture" aria-label="Remove">✕</button></div>`,
+        (p) => `<div class="pic${s.background === 'image' && s.backgroundImage === p.id ? ' on' : ''}" data-pic="${U.esc(p.id)}" title="Use this picture">
+          <img src="${U.esc(syslens.pictures.url(p.id, true))}" alt="" loading="lazy" draggable="false">
+          <button class="pic-x" data-pic-remove="${U.esc(p.id)}" title="Remove this picture" aria-label="Remove">✕</button></div>`,
       )
       .join('');
     const add = pictures.length < MAX_PICTURES ? `<button class="pic add" data-bg-file${uploading ? ' disabled' : ''}><span>${uploading ? 'Adding…' : '+ Upload'}</span></button>` : '';
@@ -181,7 +181,7 @@ const SettingsView = (() => {
     return `<section class="card set-card" id="set-privacy">
       <h2>Privacy and network</h2>
       ${row('Hide personal info', 'Replaces your user name and PC name everywhere and blurs network names, addresses and serial numbers, for screenshots you want to share. The window reloads.', toggle('privacy', syslens.privacyActive()))}
-      ${row('Hide network details', 'Your Wi-Fi name, IP and MAC addresses, gateway, DNS servers and who your apps talk to are kept out of this window entirely: they never reach it, so they can’t show up on screen, in a screenshot or anywhere else in SysLens. On by default.', toggle('hideNetwork', s.hideNetwork))}
+      ${row('Hide network details', 'Your Wi-Fi name, IP and MAC addresses, gateway, DNS servers and who your apps talk to are kept out of this window entirely: they never reach it, so they can’t show up on screen, in a screenshot or anywhere else in SysLens. Addresses inside command lines and window titles are hidden too. On by default; the window reloads.', toggle('hideNetwork', s.hideNetwork))}
       ${row('Look up host names', 'Show names like “github.com” for connections instead of bare addresses. Uses your normal DNS server.', toggle('resolveHosts', s.resolveHosts))}
       ${row('Measure internet latency', `Times a connection to ${U.esc(target)} every 5 seconds while SysLens is open (no data is sent) and shows it as “Ping”. Off by default.`, toggle('latency', s.latency))}
     </section>`;
@@ -330,6 +330,7 @@ const SettingsView = (() => {
     if (el.dataset.toggle) {
       const k = el.dataset.toggle;
       if (k === 'privacy') App.setPrivacy(el.checked);
+      else if (k === 'hideNetwork') App.setHideNetwork(el.checked);
       else if (k === 'notify' && el.checked) askToNotify(el);
       else App.saveSettings({ [k]: el.checked });
     } else if (el.dataset.showPage) {

@@ -26,5 +26,7 @@ foreach ($folder in $folders) {
   $link.Description = 'SysLens, the better Task Manager'
   $link.Hotkey = $Hotkey
   $link.Save()
+  # SysLens's taskbar identity, so SysLens pinned from here and its window share one button.
+  & $node (Join-Path $root 'src\main\appid.js') $link.FullName | Out-Null
   Write-Output "Created $($link.FullName)$(if ($Hotkey) { " (opens with $Hotkey)" })"
 }

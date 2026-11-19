@@ -23,11 +23,12 @@ const { HistoryService } = require('./history');
 const { MachineService } = require('./machine');
 const { Settings } = require('./settings');
 const { DevicesService } = require('./devices');
-const { redactAdapters, redactConnections } = require('./network');
+const { redactAdapters, redactConnections, scrubText } = require('./network');
 const { INSTANCE_FILE, readInstance, showExisting } = require('./instance');
 const { iconDataUrl } = require('./icons');
 const w = require('./win32');
 const shellx = require('./shell');
+const appid = require('./appid');
 const { createLogger, DATA_DIR, LOG_FILE } = require('./log');
 const pkg = require('../../package.json');
 const os = require('os');
@@ -100,6 +101,31 @@ const machine = new MachineService();
 const devices = new DevicesService();
 /** Network details stay on the server unless the user chose to show them. */
 const hideNetwork = () => settings.get('hideNetwork') || settings.get('privacy');
+
+/**
+ * With network details hidden, addresses written inside free text (a startup command, a
+ * service's command line) go as "[address hidden]". `data` is { list: [...] } or a promise of it.
+ */
+async function scrubList(data, fields) {
+  const v = await data;
+  if (!hideNetwork() || !v || !Array.isArray(v.list)) return v;
+  return {
+    ...v,
+    list: v.list.map((item) => {
+      if (!item || typeof item !== 'object') return item;
+      const out = { ...item };
+      for (const f of fields) if (typeof out[f] === 'string') out[f] = scrubText(out[f]);
+      return out;
+    }),
+  };
+}
+
+/** A process's details for its panel, with addresses in its command line and windows hidden. */
+function procDetails(pid) {
+  const d = Number.isInteger(pid) ? monitor.procs.details(pid) : null;
+  if (!d || !hideNetwork()) return d;
+  return { ...d, cmd: scrubText(d.cmd), windows: Array.isArray(d.windows) ? d.windows.map(scrubText) : d.windows };
+}
 let HANDLERS = {};
 const clients = new Map(); // event-stream response -> { page, needsFull, leaving }
 let everConnected = false;
@@ -133,15 +159,36 @@ function pageId(req) {
   return /^[\w-]{8,64}$/.test(id) ? id : '';
 }
 
+// Defence in depth for the page. Everything shown is escaped; on top of that the browser runs
+// only SysLens's own script files (no inline code, no eval), talks only to this server, can't be
+// put in a frame, and other sites can't load anything from here. Pictures may also come from
+// data: and blob: addresses (app icons, a picture being uploaded).
+const CSP = [
+  "default-src 'none'",
+  "script-src 'self'",
+  "worker-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "connect-src 'self'",
+  "font-src 'self'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+].join('; ');
+const SECURITY_HEADERS = {
+  'Content-Security-Policy': CSP,
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'X-Frame-Options': 'DENY',
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), usb=(), serial=(), hid=(), bluetooth=(), payment=(), display-capture=()',
+};
+
 function send(res, status, body, type = 'application/json; charset=utf-8') {
   if (res.headersSent) return;
-  res.writeHead(status, {
-    'Content-Type': type,
-    'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff',
-    'Referrer-Policy': 'no-referrer',
-    'X-Frame-Options': 'DENY',
-  });
+  res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', ...SECURITY_HEADERS });
   res.end(body);
 }
 
@@ -204,6 +251,42 @@ function ownWindows() {
     return w.topWindows().filter((x) => pids.has(x.pid));
   } catch {
     return [];
+  }
+}
+
+// ---------- taskbar identity ----------
+// Pinning the window pins SysLens, not Edge (see appid.js). Looked at every lifecycle tick: a new
+// window is tagged within seconds, and a tagged one is checked again every 30 s in case Edge
+// puts its own ID back.
+const tagged = new Map(); // hwnd -> when it was last confirmed
+function tagWindows() {
+  const now = Date.now();
+  for (const win of ownWindows()) {
+    const seen = tagged.get(win.hwnd);
+    if (seen && now - seen < 30000) continue;
+    try {
+      if (appid.windowAppId(win.hwnd) !== appid.APP_ID && !appid.tagWindow(win.hwnd, { appDir: APP_DIR, nodeExe: process.execPath })) {
+        logOften('tag', 'could not give the window SysLens’s taskbar identity');
+        continue;
+      }
+      tagged.set(win.hwnd, now);
+    } catch (err) {
+      logOften('tag', 'taskbar identity failed:', err);
+    }
+  }
+  if (tagged.size > 20) tagged.clear(); // handles of windows long closed
+}
+
+/** The Start menu and desktop shortcuts get the same ID, so what starts or is pinned from them shares the window's button. */
+function tagShortcuts() {
+  for (const lnk of appid.ownShortcuts(APP_DIR)) {
+    try {
+      const r = appid.tagShortcut(lnk);
+      if (r === 'set') log(`gave ${path.basename(path.dirname(lnk))}\\${path.basename(lnk)} SysLens’s taskbar identity`);
+      else if (r !== 'already') log(`could not update ${lnk}: ${r}`);
+    } catch (err) {
+      log(`could not update ${lnk}:`, err);
+    }
   }
 }
 
@@ -422,6 +505,7 @@ function packRows(list, metaFields, dynFields, sentMap, full) {
   const meta = {};
   const rows = new Array(list.length);
   const next = new Map();
+  const hidden = hideNetwork();
   for (let i = 0; i < list.length; i++) {
     const item = list[i];
     let sig = '';
@@ -429,6 +513,8 @@ function packRows(list, metaFields, dynFields, sentMap, full) {
     if (full || sentMap.get(item.key) !== sig) {
       const m = {};
       for (const f of metaFields) m[f] = item[f];
+      // Window titles can hold addresses ("192.168.1.1 - Router"): hidden with the rest.
+      if (hidden && Array.isArray(m.windows)) m.windows = m.windows.map(scrubText);
       meta[item.key] = m;
     }
     next.set(item.key, sig);
@@ -598,13 +684,13 @@ function buildHandlers() {
       const data = await touch('adapters', network.adapterInfo(!!refresh));
       return hideNetwork() ? redactAdapters(data) : data;
     },
-    'services:list': (refresh) => touch('services', services.list(!!refresh)),
+    'services:list': (refresh) => scrubList(touch('services', services.list(!!refresh)), ['command']),
     'svc:control': (name, action) => touch('services', services.control(name, action)),
     'svc:startType': (name, type) => touch('services', services.setStartType(name, type)),
-    'startup:list': (refresh) => touch('startup', startup.list(!!refresh)),
+    'startup:list': (refresh) => scrubList(touch('startup', startup.list(!!refresh)), ['command']),
     'startup:toggle': (id, on) => touch('startup', startup.setEnabled(id, !!on)),
     'history:get': (refresh) => touch('history', history.get(!!refresh)),
-    'proc:details': (pid) => (Number.isInteger(pid) ? monitor.procs.details(pid) : null),
+    'proc:details': (pid) => procDetails(pid),
     'proc:kill': (targets) => monitor.procs.kill(cleanTargets(targets)),
     'proc:killTree': (targets) => monitor.procs.killTree(cleanTargets(targets)),
     'proc:priority': (targets, level) => monitor.procs.setPriority(cleanTargets(targets), level),
@@ -663,7 +749,7 @@ function openEvents(req, res) {
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-store',
     Connection: 'keep-alive',
-    'X-Content-Type-Options': 'nosniff',
+    ...SECURITY_HEADERS,
   });
   res.write(': connected\n\n');
   const c = { page: pageId(req), needsFull: !monitor.latest, leaving: false };
@@ -794,6 +880,7 @@ function lifecycleTick() {
   // so start counting again rather than treating the window as gone.
   if (now - lastTickAt > LIFECYCLE_TICK * 5 && !clients.size) lastClientAt = now;
   lastTickAt = now;
+  if (windowMode === 'app' && !shuttingDown) tagWindows();
   if (clients.size && settings.get('alwaysOnTop')) applyTopmost();
   if (shuttingDown || windowMode === 'none' || clients.size) return;
   const idle = now - lastClientAt;
@@ -918,6 +1005,8 @@ function onSettingsChanged(changed) {
     });
   }
   if ('latency' in changed && !changed.latency) latency = null;
+  // What may be shown changed: send every process's details again under the new rule.
+  if ('hideNetwork' in changed || 'privacy' in changed) sentMeta = { procs: new Map(), groups: new Map(), sys: '' };
   // Picked "Maximized" for when SysLens opens: show it now too. (Full screen is entered by the
   // window itself, which needs the click that changed the setting.)
   if (changed.windowStart === 'maximized') for (const win of ownWindows()) w.maximizeWindow(win.hwnd);
@@ -1008,6 +1097,7 @@ async function main() {
   setInterval(latencyTick, 5000);
   setInterval(sweepCaches, 60000);
   if (settings.get('startWithWindows') && !DEV) shellx.setAutostart(true).catch(() => {}); // keeps the path current if SysLens moved
+  if (!DEV && !ADMIN) setTimeout(tagShortcuts, 5000);
   log(`listening on 127.0.0.1:${port}${monitor.admin ? ' as administrator' : ''}`);
 }
 

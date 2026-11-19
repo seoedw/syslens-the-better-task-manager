@@ -9,11 +9,15 @@
 Every process, where your RAM really goes, what fills your disk, what starts with Windows,
 and what your PC did while you were away. In plain language, on one screen.
 
+### **[Download SysLens Beta 1.4.1](https://github.com/seoedw/syslens-the-better-task-manager/releases/latest/download/SysLens-Beta-1.4.1-portable.zip)** (38 MB)
+
+**It brings its own Node.js, so there's nothing else to install.** Unzip it and double-click **Install SysLens.cmd** ([step by step](#download-the-beta)).
+
 <img alt="Windows 10 and 11" src="https://img.shields.io/badge/Windows-10%20%7C%2011-0067C0?style=flat-square&logo=windows&logoColor=white">
 <img alt="Node.js 20 or newer, or the portable build" src="https://img.shields.io/badge/Node.js-20%2B%20or%20portable-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white">
 <img alt="No administrator rights needed" src="https://img.shields.io/badge/admin-not%20needed-3a3a3a?style=flat-square">
 <img alt="No telemetry" src="https://img.shields.io/badge/telemetry-none-3a3a3a?style=flat-square">
-<img alt="Version 1.4.0 beta" src="https://img.shields.io/badge/version-1.4.0%20beta-3a3a3a?style=flat-square">
+<img alt="Version 1.4.1 beta" src="https://img.shields.io/badge/version-1.4.1%20beta-3a3a3a?style=flat-square">
 <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-3a3a3a?style=flat-square">
 
 [Download](#download-the-beta) · [Install](#install) · [What it shows](#what-it-shows) · [Screenshots](#screenshots) · [Shortcuts](#keyboard-shortcuts) · [FAQ](#faq) · [How it works](#how-it-works) · [Changelog](CHANGELOG.md) · [Feedback](#feedback) · [License](#license)
@@ -75,7 +79,7 @@ It does the same for everything else it shows: which app is talking to which ser
 - Apps ranked by private memory, working set or commit
 
 ### Network
-- **Your network details stay hidden by default**: Wi-Fi name, IP and MAC addresses, gateway, DNS servers and who your apps talk to never reach the window, so they can't show up on screen or in a screenshot. Turn **Hide network details** off in Settings to see them.
+- **Your network details stay hidden by default**: Wi-Fi name, IP and MAC addresses, gateway, DNS servers and who your apps talk to never reach the window, so they can't show up on screen or in a screenshot. Not one IP address is sent, not even 127.0.0.1 (the page says **This PC** or **All networks** instead), and addresses inside command lines and window titles are hidden too. Turn **Hide network details** off in Settings to see every address of every adapter.
 - The connection you're on: Wi-Fi name, signal, band and standard, IP address, gateway and DNS
 - Throughput over the last two minutes, and every adapter with its addresses and driver
 - Every TCP and UDP connection with the app that owns it and the remote server's host name. Connections inside your own PC are hidden unless you ask for them.
@@ -192,13 +196,14 @@ SysLens never deletes anything. Storage shows where the space went and opens the
 
 ## Download the beta
 
-The easiest way: open **[Releases](https://github.com/seoedw/syslens-the-better-task-manager/releases)** and download **SysLens Beta 1.4.0** (`SysLens-Beta-1.4.0-portable.zip`). It brings its own Node.js, so there's nothing else to install.
+**[Download SysLens Beta 1.4.1](https://github.com/seoedw/syslens-the-better-task-manager/releases/latest/download/SysLens-Beta-1.4.1-portable.zip)** (`SysLens-Beta-1.4.1-portable.zip`, 38 MB), or pick it from **[Releases](https://github.com/seoedw/syslens-the-better-task-manager/releases)**. **It brings its own Node.js, so there's nothing else to install.**
 
 1. Right-click the zip, choose **Properties**, tick **Unblock** if it's there, and click OK. (Windows marks downloaded files; this keeps it from asking about each one.)
 2. Unzip it somewhere permanent, such as Documents.
 3. Double-click **Install SysLens.cmd**. It adds SysLens to the desktop and Start menu with the **Ctrl+Alt+Shift+S** shortcut, and opens it. Or double-click **SysLens.cmd** to just open it.
+4. Want it on the taskbar? Right-click SysLens's taskbar button and choose **Pin to taskbar**: that pins SysLens itself, with its own icon.
 
-There's no .exe on purpose: Windows' Smart App Control blocks programs that aren't signed by a known publisher, and SmartScreen warns about them. SysLens runs on Node.js and Microsoft Edge, which are signed, so it works even with Smart App Control on.
+There's no .exe on purpose: Windows' Smart App Control blocks any program that isn't signed with a code-signing certificate from a trusted provider (a paid, identity-checked certificate; a home-made one doesn't count), and SmartScreen warns about unsigned ones everywhere else. SysLens runs on Node.js and Microsoft Edge, which are signed, so it works even with Smart App Control on.
 
 ## Install
 
@@ -341,6 +346,9 @@ The backend is plain Node.js. A small launcher starts the server and restarts it
 - With **Hide network details** on (the default), network addresses and names are removed on the server, before anything is sent to the window.
 - Background pictures are checked to be JPEGs and served only with the session token; only the tools and links on fixed lists can be opened.
 - Service and startup changes accept only names from SysLens's own lists, and values from the page reach PowerShell as data (environment variables), never as code.
+- Everything shown is escaped, and a strict Content-Security-Policy backs that up: the window runs only SysLens's own script files (no inline code, no `eval`), can't be put in a frame, and other sites can't load anything from SysLens. Each release is tested by feeding hostile HTML through every name, title, path and description SysLens shows; none of it may turn into page content.
+- The window is an Edge app window with Edge's normal sandbox and security on, and it never goes to the internet: links open in your default browser.
+- What SysLens can't protect against: a program already running in your account can do anything you can, including change SysLens's files. Run as administrator runs those same files with full rights, so only use it on a PC you trust.
 
 <details>
 <summary>Project layout</summary>
@@ -359,6 +367,7 @@ src/main/            backend (Node.js)
   history.js           the week's events and the on/sleep/off timeline
   machine.js           hardware, Windows, battery and security for the System page
   shell.js             Explorer, web search, Run new task, start with Windows, the app window
+  appid.js             SysLens's own taskbar identity, so pinning pins SysLens and not Edge
   pdh.js, win32.js     performance counters and Windows API bindings
   insights.js          findings
   knowledge.js         "What is this?" explanations

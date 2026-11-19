@@ -37,6 +37,7 @@ const App = (() => {
     setTheme: (theme) => saveSettings({ theme }),
     togglePrivacy: () => setPrivacy(!syslens.privacyActive()),
     setPrivacy,
+    setHideNetwork,
     elevate,
     saveSettings,
     refreshSoon,
@@ -168,10 +169,55 @@ const App = (() => {
 
   // ---------- privacy ----------
   // bridge.js masks the user and PC names in everything it receives, from the first byte, so
-  // switching reloads the page: every page then re-reads its data with the new setting.
+  // switching reloads the page: every page then re-reads its data with the new setting. The page
+  // you were on, scrolled where it was, comes back after the reload (not the start page).
+  const RETURN_KEY = 'syslens:return';
+  /** Reload the window, coming back to this page scrolled where it was. */
+  function reloadInPlace() {
+    try {
+      const view = document.getElementById(`view-${api.current}`);
+      sessionStorage.setItem(RETURN_KEY, JSON.stringify({ view: api.current, scroll: view ? view.scrollTop : 0, at: Date.now() }));
+    } catch {
+      /* no session storage: the start page it is */
+    }
+    location.reload();
+  }
+
   async function setPrivacy(on) {
     await saveSettings({ privacy: !!on });
-    if (!!on !== syslens.privacyActive()) location.reload();
+    if (!!on !== syslens.privacyActive()) reloadInPlace();
+  }
+
+  /** "Hide network details" reloads too, so nothing already received stays on any page. */
+  async function setHideNetwork(on) {
+    await saveSettings({ hideNetwork: !!on });
+    reloadInPlace();
+  }
+
+  /** Where a reload for "Hide personal info" was asked from, if it just happened. Read once. */
+  function takeReturn() {
+    try {
+      const back = JSON.parse(sessionStorage.getItem(RETURN_KEY) || 'null');
+      sessionStorage.removeItem(RETURN_KEY);
+      return back && views[back.view] && Date.now() - back.at < 60000 ? back : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Scroll a page back to where it was, a few times while its data is still arriving. */
+  function restoreScroll(name, top) {
+    const view = document.getElementById(`view-${name}`);
+    if (!view || !(top > 0)) return;
+    let set = 0;
+    for (const ms of [0, 150, 400, 900, 1600, 2500, 4000]) {
+      setTimeout(() => {
+        // Stop if you've moved on or scrolled yourself in the meantime.
+        if (api.current !== name || Math.abs(view.scrollTop - set) > 2) return;
+        view.scrollTop = top;
+        set = view.scrollTop;
+      }, ms);
+    }
   }
 
   // ---------- sidebar ----------
@@ -716,10 +762,12 @@ const App = (() => {
     const scan = params.get('scan');
     const s = api.settings;
     const startPage = s.startPage === 'last' ? s.lastPage : s.startPage;
-    const first = params.get('view') || (scan ? 'storage' : startPage || visibleOrder()[0]);
+    const back = takeReturn();
+    const first = params.get('view') || (scan ? 'storage' : back ? back.view : startPage || visibleOrder()[0]);
     const snap = await syslens.snapshot().catch(() => null);
     if (snap) onSnapshot(snap);
     go(first, scan ? { scan } : params.get('section') ? { section: params.get('section') } : {});
+    if (back && back.view === first) restoreScroll(first, back.scroll);
 
     // A new version: say so once, with its changes a click away.
     if (s.lastVersion !== boot.info.version && !params.get('view')) {

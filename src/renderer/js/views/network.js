@@ -46,7 +46,7 @@ const NetworkView = (() => {
           <button data-f="listening">Listening</button>
           <button data-f="all">All</button>
         </div>
-        <label class="switch" data-tip="Apps talking to other apps on this PC (127.0.0.1). Usually internal plumbing, so hidden by default."><input type="checkbox" id="nw-local" /> Show connections within this PC</label>
+        <label class="switch" data-tip="Apps talking to other apps on this PC, never leaving it. Usually internal plumbing, so hidden by default."><input type="checkbox" id="nw-local" /> Show connections within this PC</label>
         <span class="spacer"></span>
         <span class="faint" id="nw-conn-when"></span>
       </div>
@@ -194,12 +194,14 @@ const NetworkView = (() => {
                 w && (w.rx || w.tx) && ['Link rate', `${w.rx} Mbps down · ${w.tx} Mbps up`],
                 !w && a.speed > 0 && ['Link speed', U.bits(a.speed / 8)],
                 a.ipv4.length && ['IPv4', addrs(a.ipv4, '<br>')],
-                a.ipv6.length && ['IPv6', addrs(a.ipv6.slice(0, 2), '<br>', true)],
+                a.ipv6.length && ['IPv6', addrs(a.ipv6, '<br>', true)],
+                a.linkLocal && a.linkLocal.length && ['Link-local IPv6', addrs(a.linkLocal, '<br>', true)],
                 a.gateway.length && ['Gateway', addrs(a.gateway, ', ')],
                 a.dns.length && ['DNS servers', addrs(a.dns, ', ')],
                 (a.mac || a.mac === null) && ['MAC address', `<span class="mono">${U.net(a.mac)}</span>`],
                 a.up && a.dhcp != null && ['Addressing', a.dhcp ? 'Automatic (DHCP)' : 'Manual'],
-                a.driver && ['Driver', U.esc(a.driver)],
+                // "version": four-part driver versions look just like IP addresses otherwise.
+                a.driver && ['Driver', `version ${U.esc(a.driver)}`],
               ])}
             </div>`;
           })
@@ -221,7 +223,12 @@ const NetworkView = (() => {
     return p ? { name: p.display || p.name, path: p.path, isWindows: p.isWindows, exe: p.name } : { name: `PID ${c.pid}`, path: null };
   }
 
-  const scope = (addr) => (addr === '0.0.0.0' || addr === '::' ? 'All networks' : addr === '127.0.0.1' || addr === '::1' ? 'This PC only' : addr == null ? null : addr);
+  // Where a port listens, in words for the two cases that aren't really about your network:
+  // every network (0.0.0.0, ::) and this PC only (127.0.0.1, ::1). With network details hidden
+  // no address arrives at all, only that fact (localScope / remoteScope: 'any' or 'pc').
+  const SCOPE_WORDS = { any: 'All networks', pc: 'This PC only' };
+  const scope = (addr, sc) =>
+    addr === '0.0.0.0' || addr === '::' ? SCOPE_WORDS.any : addr === '127.0.0.1' || addr === '::1' ? SCOPE_WORDS.pc : addr == null ? SCOPE_WORDS[sc] || null : addr;
 
   function renderListening() {
     const map = procs();
@@ -230,9 +237,10 @@ const NetworkView = (() => {
       if (c.state !== 'Listening') continue;
       const key = `${c.lport}|${c.pid}`;
       const cur = seen.get(key);
+      const where = scope(c.local, c.localScope);
       if (cur) {
-        if (!cur.scopes.includes(scope(c.local))) cur.scopes.push(scope(c.local));
-      } else seen.set(key, { port: c.lport, pid: c.pid, service: c.service, scopes: [scope(c.local)] });
+        if (!cur.scopes.includes(where)) cur.scopes.push(where);
+      } else seen.set(key, { port: c.lport, pid: c.pid, service: c.service, scopes: [where] });
     }
     const list = [...seen.values()].sort((a, b) => a.port - b.port);
     const html = list.length
@@ -274,8 +282,15 @@ const NetworkView = (() => {
     const body = shown
       .slice(0, 600)
       .map(({ c, app }) => {
-        const local = scope(c.local);
-        const remote = c.proto === 'UDP' || c.state === 'Listening' ? `<span class="faint">${U.net(local)}</span>` : c.host ? `${U.esc(c.host)} <span class="faint">${U.net(c.remote)}</span>` : U.net(c.remote);
+        const local = scope(c.local, c.localScope);
+        const remote =
+          c.proto === 'UDP' || c.state === 'Listening'
+            ? `<span class="faint">${U.net(local)}</span>`
+            : c.host
+              ? `${U.esc(c.host)} <span class="faint">${U.net(c.remote)}</span>`
+              : !c.remote && c.remoteScope === 'pc'
+                ? '<span class="faint">This PC</span>'
+                : U.net(c.remote);
         const portNum = c.state === 'Established' ? c.rport : c.lport;
         // Withheld details don't go into attributes or tooltips either.
         const hostAttr = c.host ? ` data-host="${U.esc(c.host)}"` : '';

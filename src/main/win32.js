@@ -13,6 +13,7 @@ const user32 = koffi.load('user32.dll');
 const dwmapi = koffi.load('dwmapi.dll');
 const advapi32 = koffi.load('advapi32.dll');
 const iphlpapi = koffi.load('iphlpapi.dll');
+const wtsapi32 = koffi.load('wtsapi32.dll');
 
 koffi.proto('int __stdcall WNDENUMPROC(intptr_t hwnd, intptr_t lparam)');
 
@@ -42,6 +43,20 @@ const api = {
   SetWindowPos: user32.func('int __stdcall SetWindowPos(intptr_t hwnd, intptr_t after, int x, int y, int cx, int cy, uint32 flags)'),
   keybd_event: user32.func('void __stdcall keybd_event(uint8 vk, uint8 scan, uint32 flags, uintptr_t extra)'),
   PostMessageW: user32.func('int __stdcall PostMessageW(intptr_t hwnd, uint32 msg, uintptr_t wparam, intptr_t lparam)'),
+  LockWorkStation: user32.func('int __stdcall LockWorkStation()'),
+  IsZoomed: user32.func('int __stdcall IsZoomed(intptr_t hwnd)'),
+  SetThreadDpiAwarenessContext: user32.func('intptr_t __stdcall SetThreadDpiAwarenessContext(intptr_t ctx)'),
+  GetDpiForSystem: user32.func('uint32 __stdcall GetDpiForSystem()'),
+  GetWindowRect: user32.func('int __stdcall GetWindowRect(intptr_t hwnd, _Out_ void *rect)'),
+  MonitorFromPoint: user32.func('intptr_t __stdcall MonitorFromPoint(int64 pt, uint32 flags)'),
+  GetMonitorInfoW: user32.func('int __stdcall GetMonitorInfoW(intptr_t monitor, _Inout_ void *info)'),
+
+  // wtsapi32: signed-in sessions (Task Manager's Users tab)
+  WTSEnumerateSessionsW: wtsapi32.func('int __stdcall WTSEnumerateSessionsW(intptr_t server, uint32 reserved, uint32 version, _Out_ void **info, _Out_ uint32 *count)'),
+  WTSQuerySessionInformationW: wtsapi32.func('int __stdcall WTSQuerySessionInformationW(intptr_t server, uint32 session, int infoClass, _Out_ void **buf, _Out_ uint32 *bytes)'),
+  WTSFreeMemory: wtsapi32.func('void __stdcall WTSFreeMemory(void *mem)'),
+  WTSDisconnectSession: wtsapi32.func('int __stdcall WTSDisconnectSession(intptr_t server, uint32 session, int wait)'),
+  WTSLogoffSession: wtsapi32.func('int __stdcall WTSLogoffSession(intptr_t server, uint32 session, int wait)'),
 
   // advapi32: process tokens
   OpenProcessToken: advapi32.func('int __stdcall OpenProcessToken(intptr_t h, uint32 access, _Out_ intptr_t *token)'),
@@ -459,6 +474,129 @@ function minimizeWindow(hwnd) {
   return !!api.ShowWindow(hwnd, 6 /* SW_MINIMIZE */);
 }
 
+function maximizeWindow(hwnd) {
+  if (api.IsZoomed(hwnd)) return true;
+  return !!api.ShowWindow(hwnd, 3 /* SW_MAXIMIZE */);
+}
+
+// ---------- window placement, in real screen pixels ----------
+// Node isn't DPI aware, so Windows would scale every coordinate it sees; these switch the
+// calling thread to per-monitor awareness for the duration of the call.
+function dpiAware(fn) {
+  let prev = 0;
+  try {
+    prev = api.SetThreadDpiAwarenessContext(-4 /* PER_MONITOR_AWARE_V2 */);
+  } catch {
+    /* older Windows: unscaled is all there is */
+  }
+  try {
+    return fn();
+  } finally {
+    if (prev) api.SetThreadDpiAwarenessContext(prev);
+  }
+}
+
+/** The display scale (1 = 100%, 2 = 200%). */
+function screenScale() {
+  return dpiAware(() => (api.GetDpiForSystem() || 96) / 96);
+}
+
+/** The work area (screen minus taskbar) of the monitor at a point, or the main monitor. */
+function workAreaAt(x, y) {
+  return dpiAware(() => {
+    const pt = (BigInt(y | 0) << 32n) | (BigInt(x | 0) & 0xffffffffn); // POINT passed by value
+    const mon = api.MonitorFromPoint(pt, 0 /* MONITOR_DEFAULTTONULL */) || api.MonitorFromPoint(0n, 1 /* MONITOR_DEFAULTTOPRIMARY */);
+    const info = Buffer.alloc(40);
+    info.writeUInt32LE(40, 0);
+    if (!mon || !api.GetMonitorInfoW(mon, info)) return null;
+    const r = { x: info.readInt32LE(20), y: info.readInt32LE(24) };
+    r.w = info.readInt32LE(28) - r.x;
+    r.h = info.readInt32LE(32) - r.y;
+    r.onScreen = !!api.MonitorFromPoint(pt, 0);
+    return r;
+  });
+}
+
+function windowRect(hwnd) {
+  return dpiAware(() => {
+    const b = Buffer.alloc(16);
+    if (!api.GetWindowRect(hwnd, b)) return null;
+    const x = b.readInt32LE(0);
+    const y = b.readInt32LE(4);
+    return { x, y, w: b.readInt32LE(8) - x, h: b.readInt32LE(12) - y };
+  });
+}
+
+/** Move and size a window to exact screen pixels. */
+function placeWindow(hwnd, r) {
+  return dpiAware(() => !!api.SetWindowPos(hwnd, 0, r.x, r.y, r.w, r.h, 0x0004 /* NOZORDER */ | 0x0010 /* NOACTIVATE */));
+}
+
+// ---------- sessions (who is signed in) ----------
+const WTS_STATES = ['Active', 'Connected', 'Connecting', 'Shadowing', 'Disconnected', 'Idle', 'Listening', 'Reset', 'Down', 'Starting'];
+const FILETIME_EPOCH_MS = 11644473600000n;
+const fileTimeMs = (v) => (v > 0n ? Number(v / 10000n - FILETIME_EPOCH_MS) : 0);
+
+/** Copy `len` bytes of memory Windows allocated, so it can be freed straight away. */
+function copyOut(ptr, len) {
+  return Buffer.from(new Uint8Array(koffi.view(ptr, len)));
+}
+
+/** One session's user, state, lock state and times (WTSSessionInfoEx), or null. */
+function sessionInfo(id) {
+  const buf = [null];
+  const bytes = [0];
+  if (!api.WTSQuerySessionInformationW(0, id, 25 /* WTSSessionInfoEx */, buf, bytes) || !buf[0]) return null;
+  try {
+    if (bytes[0] < 208) return null;
+    const b = copyOut(buf[0], bytes[0]);
+    const wstr = (off, chars) => {
+      const s = b.toString('utf16le', off, off + chars * 2);
+      const nul = s.indexOf('\0');
+      return nul >= 0 ? s.slice(0, nul) : s;
+    };
+    const flags = b.readInt32LE(16);
+    return {
+      id: b.readUInt32LE(8),
+      state: WTS_STATES[b.readInt32LE(12)] || 'Unknown',
+      locked: flags === 0 ? true : flags === 1 ? false : null,
+      station: wstr(20, 33),
+      user: wstr(86, 21),
+      domain: wstr(128, 18),
+      logon: fileTimeMs(b.readBigInt64LE(168)),
+      lastInput: fileTimeMs(b.readBigInt64LE(192)),
+    };
+  } finally {
+    api.WTSFreeMemory(buf[0]);
+  }
+}
+
+/** Every session on this PC: [{ id, station, state, user, domain, locked, logon, lastInput }]. */
+function sessions() {
+  const info = [null];
+  const count = [0];
+  if (!api.WTSEnumerateSessionsW(0, 0, 1, info, count) || !info[0]) return [];
+  const ids = [];
+  try {
+    const raw = copyOut(info[0], count[0] * 24); // WTS_SESSION_INFOW: id, station name pointer, state
+    for (let i = 0; i < count[0]; i++) ids.push({ id: raw.readUInt32LE(i * 24), state: WTS_STATES[raw.readInt32LE(i * 24 + 16)] || 'Unknown' });
+  } finally {
+    api.WTSFreeMemory(info[0]);
+  }
+  return ids.map((s) => sessionInfo(s.id) || { id: s.id, state: s.state, locked: null, station: '', user: '', domain: '', logon: 0, lastInput: 0 });
+}
+
+/** Lock this PC (Windows+L). */
+function lockWorkstation() {
+  return !!api.LockWorkStation();
+}
+
+/** Disconnect (switch user) or sign out a session. */
+function sessionAction(id, action) {
+  const ok = action === 'logoff' ? api.WTSLogoffSession(0, id, 0) : api.WTSDisconnectSession(0, id, 0);
+  return ok ? { ok: true } : { ok: false, error: errorText(api.GetLastError()) };
+}
+
 /** Free and total space of each fixed drive (cheap: one call per drive). */
 function fixedVolumes() {
   const out = [];
@@ -543,6 +681,14 @@ module.exports = {
   setTopmost,
   closeWindow,
   minimizeWindow,
+  maximizeWindow,
+  screenScale,
+  workAreaAt,
+  windowRect,
+  placeWindow,
+  sessions,
+  lockWorkstation,
+  sessionAction,
   fixedVolumes,
   topWindows,
   errorText,

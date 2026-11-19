@@ -273,4 +273,41 @@ function shapeAdapters(raw, wifi) {
   return { list, at: Date.now() };
 }
 
-module.exports = { NetworkService, isPublic };
+// ---------- hiding network details ----------
+// With "Hide network details" (or "Hide personal info") on, these never leave the server:
+// the window can't show what it never receives, so nothing can be read from it either.
+const LOCAL_SCOPES = new Set(['0.0.0.0', '::', '127.0.0.1', '::1']);
+const isLoop = (ip) => /^127\.|^::1$|^::ffff:127\./.test(ip || '');
+
+function redactAdapters(data) {
+  if (!data || !Array.isArray(data.list)) return data;
+  const hide = (arr) => (Array.isArray(arr) ? arr.map(() => null) : []);
+  return {
+    ...data,
+    redacted: true,
+    list: data.list.map((a) => ({
+      ...a,
+      mac: a.mac ? null : '',
+      ipv4: hide(a.ipv4),
+      ipv6: hide(a.ipv6),
+      linkLocal: hide(a.linkLocal),
+      gateway: hide(a.gateway),
+      dns: hide(a.dns),
+      wifi: a.wifi ? { ...a.wifi, ssid: null, auth: null } : null,
+    })),
+  };
+}
+
+function redactConnections(list) {
+  if (!Array.isArray(list)) return list;
+  return list.map((c) => ({
+    ...c,
+    loop: isLoop(c.remote) || (c.state === 'Listening' && isLoop(c.local)),
+    remote: c.remote && !LOCAL_SCOPES.has(c.remote) ? null : c.remote,
+    host: null,
+    local: LOCAL_SCOPES.has(c.local) ? c.local : null,
+    redacted: true,
+  }));
+}
+
+module.exports = { NetworkService, isPublic, redactAdapters, redactConnections };

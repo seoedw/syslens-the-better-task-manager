@@ -13,9 +13,10 @@ and what your PC did while you were away. In plain language, on one screen.
 <img alt="Node.js 20 or newer, or the portable build" src="https://img.shields.io/badge/Node.js-20%2B%20or%20portable-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white">
 <img alt="No administrator rights needed" src="https://img.shields.io/badge/admin-not%20needed-3a3a3a?style=flat-square">
 <img alt="No telemetry" src="https://img.shields.io/badge/telemetry-none-3a3a3a?style=flat-square">
-<img alt="Version 1.3.0" src="https://img.shields.io/badge/version-1.3.0-3a3a3a?style=flat-square">
+<img alt="Version 1.4.0 beta" src="https://img.shields.io/badge/version-1.4.0%20beta-3a3a3a?style=flat-square">
+<img alt="MIT license" src="https://img.shields.io/badge/license-MIT-3a3a3a?style=flat-square">
 
-[Install](#install) · [What it shows](#what-it-shows) · [Screenshots](#screenshots) · [Shortcuts](#keyboard-shortcuts) · [FAQ](#faq) · [How it works](#how-it-works) · [Changelog](CHANGELOG.md)
+[Download](#download-the-beta) · [Install](#install) · [What it shows](#what-it-shows) · [Screenshots](#screenshots) · [Shortcuts](#keyboard-shortcuts) · [FAQ](#faq) · [How it works](#how-it-works) · [Changelog](CHANGELOG.md) · [Feedback](#feedback) · [License](#license)
 
 <img src="docs/screenshots/overview.png" alt="SysLens Overview: live CPU, memory, disk, network and GPU, where memory is going, findings, top apps and recent activity" width="100%">
 
@@ -40,6 +41,9 @@ It does the same for everything else it shows: which app is talking to which ser
 | Are Secure Boot, BitLocker and memory integrity on? | **System** › Security |
 | What is filling my disk? | **Storage**: a full-drive scan, the largest files, apps by real size |
 | How much power is the processor drawing, and how hot is it? | **Performance** › Power |
+| Which device or driver is causing trouble? | **Devices**: problem devices in plain words, every driver with its date and maker |
+| Who else is signed in, and what are they running? | **Users** |
+| Where is that Windows tool again? | **Tools**: quick fixes and 30 Windows tools, each with a line on what it's for |
 
 ## What it shows
 
@@ -57,7 +61,8 @@ It does the same for everything else it shows: which app is talking to which ser
 - CPU, memory (the private working set, the same number Task Manager shows), GPU, GPU memory, disk and I/O, handles and threads, with Task Manager-style shading
 - A **Status** column that shows suspended apps and apps in efficiency mode, and optional **Priority**, **Running for** and **Publisher** columns. Right-click the headers to pick.
 - A details panel: what the process is, live CPU and memory graphs, its user account and integrity level, 32- or 64-bit, command line, parent chain, child processes, open windows, the services inside it and its network connections
-- **Right-click any row** for Switch to, End task, End process tree, Efficiency mode, Set priority, Suspend and Resume, Open file location, Search online, Go to services and Copy. Windows Explorer gets **Restart**. Critical Windows processes are protected.
+- **Right-click any row** for Switch to, End task, End process tree, Restart app, Efficiency mode, Set priority, Suspend and Resume, Open file location, Search online, Go to services and Copy. Critical Windows processes are protected.
+- **Restart, like Task Manager:** for Windows Explorer, End task becomes **Restart task** (the button, the details panel, the Delete key and the menu), which brings back the taskbar, Start menu and desktop while your apps stay open. Other desktop apps get **Restart app**: it closes the app and opens it again with the same settings.
 - **End task** asks first and says how much memory you'll get back. **Copy this list** pastes straight into Excel.
 
 ### Performance
@@ -70,6 +75,7 @@ It does the same for everything else it shows: which app is talking to which ser
 - Apps ranked by private memory, working set or commit
 
 ### Network
+- **Your network details stay hidden by default**: Wi-Fi name, IP and MAC addresses, gateway, DNS servers and who your apps talk to never reach the window, so they can't show up on screen or in a screenshot. Turn **Hide network details** off in Settings to see them.
 - The connection you're on: Wi-Fi name, signal, band and standard, IP address, gateway and DNS
 - Throughput over the last two minutes, and every adapter with its addresses and driver
 - Every TCP and UDP connection with the app that owns it and the remote server's host name. Connections inside your own PC are hidden unless you ask for them.
@@ -101,13 +107,28 @@ It does the same for everything else it shows: which app is talking to which ser
 - Security at a glance: antivirus, firewall, Secure Boot, TPM, BitLocker, memory integrity, Smart App Control and UAC
 - Recent updates, and how much memory SysLens itself is using
 
+### Users
+- Like Task Manager's Users tab: who is signed in, each session's state, and how many processes, how much CPU, memory, disk and GPU each one uses, with its biggest apps
+- **Lock**, **Switch user** and **Sign out** (sign out asks first), and the same for other people's sessions as administrator
+
+### Devices
+- Devices Windows reports a problem with (Device Manager's yellow triangles), with the problem in plain words
+- Every device driver with its maker, version, date and signer; the kernel drivers loaded right now with their publisher and file. Third-party drivers (the usual cause of driver memory leaks and blue screens) are one filter away.
+
+### Tools
+- Quick fixes: flush the DNS cache, restart Windows Explorer, run a task, copy a system report, lock the PC
+- Thirty Windows tools a click away, each with a line on what it's for: Device Manager, Event Viewer, Reliability Monitor, Resource Monitor, Disk Cleanup, Memory Diagnostic, Registry Editor, System Configuration and more. The ones that need administrator rights are marked.
+
 ### Settings
 - **Theme**: Auto (follows Windows), Light, Dark, or **Black** with true black for OLED screens
 - **Accent color**: your Windows accent, ten others, or any color you pick
 - **Density** (compact or comfortable) and **interface size** (90 to 120%)
-- **Background**: Aurora, Dusk, Mesh, Dots, Grid or a picture of your own, with a strength slider
+- **Background**: Aurora, Dusk, Mesh, Dots, Grid, or **your own pictures**: upload up to 12 (or drop them onto Settings), click one to use it, with Fill or Fit, a softening blur and a strength slider
+- **When SysLens opens**: at **Task Manager's size** (exactly where and as big as Task Manager opens on your PC) by default, or the size from last time, maximized, or full screen
+- **Full screen shortcut**: F11 (Edge's own full screen) by default, or any combination you pick; there's also a full-screen button in the title bar
 - **Pages**: drag them into any order (here or right in the sidebar), hide the ones you don't use, pick the start page
-- Everything Task Manager's settings page has: start page, update speed, always on top, minimize when switching to an app, and theme. Plus start with Windows, the keyboard shortcut that opens SysLens, confirmations, process columns, heat shading, full account names, privacy and latency.
+- Everything Task Manager's settings page has: start page, update speed, always on top, minimize when switching to an app, and theme. Plus start with Windows, the keyboard shortcut that opens SysLens, confirmations, notifications about problems, process columns, heat shading, full account names, privacy, network details and latency.
+- At the bottom: the version, who made SysLens, the GitHub repository, the license and where to send feedback
 
 ### Everywhere
 - **Right-click** works on almost everything: processes, services, startup entries, connections, files and folders, events, the sidebar, and anywhere else for quick actions
@@ -115,7 +136,8 @@ It does the same for everything else it shows: which app is talking to which ser
 - **Ctrl+Alt+Shift+S** opens SysLens from anywhere in Windows; opening it while it runs brings the window forward
 - **Run new task** (Ctrl+N), **Restart Windows Explorer**, and **Copy system report** (Ctrl+Shift+C), a plain-text summary of your PC for asking someone for help
 - Light, dark and black themes, and your Windows accent color when it's a color
-- **Hide personal info** replaces your user and PC names and blurs network names and hardware IDs, for screenshots you want to share
+- **Hide personal info** replaces your user and PC names and covers window titles and hardware IDs with solid bars, for screenshots you want to share
+- **Notify me about problems** (optional): a Windows notification when something serious comes up while you're in another app
 - Reconnects by itself after sleep, and restarts its own server if it ever crashes
 - Shows what changed after each update; the full list is in [CHANGELOG.md](CHANGELOG.md)
 
@@ -133,8 +155,16 @@ SysLens never deletes anything. Storage shows where the space went and opens the
     <td><img src="docs/screenshots/overview-black.png" alt="Overview in the black theme"><br><sub><b>Black theme.</b> True black for OLED screens.</sub></td>
   </tr>
   <tr>
+    <td><img src="docs/screenshots/users.png" alt="The Users page"><br><sub><b>Users.</b> Who is signed in and what each session uses.</sub></td>
+    <td><img src="docs/screenshots/devices.png" alt="The Devices page"><br><sub><b>Devices.</b> Problem devices, every driver and the kernel drivers in memory.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/tools.png" alt="The Tools page"><br><sub><b>Tools.</b> Quick fixes and every Windows tool worth knowing.</sub></td>
+    <td><img src="docs/screenshots/admin.png" alt="The Run as administrator confirmation"><br><sub><b>Run as administrator</b> asks first and lists what it lets you do.</sub></td>
+  </tr>
+  <tr>
     <td><img src="docs/screenshots/memory.png" alt="The Memory page"><br><sub><b>Memory.</b> Every byte of RAM accounted for and explained.</sub></td>
-    <td><img src="docs/screenshots/network.png" alt="The Network page"><br><sub><b>Network.</b> Wi-Fi, adapters, listening ports and connections per app.</sub></td>
+    <td><img src="docs/screenshots/network.png" alt="The Network page with network details hidden"><br><sub><b>Network.</b> Adapters, listening ports and connections per app, with your network details hidden.</sub></td>
   </tr>
   <tr>
     <td><img src="docs/screenshots/history.png" alt="The History page"><br><sub><b>History.</b> When the PC was on, asleep or off this week, and what happened.</sub></td>
@@ -153,12 +183,22 @@ SysLens never deletes anything. Storage shows where the space went and opens the
     <td><img src="docs/screenshots/search.png" alt="Ctrl+K search"><br><sub><b>Ctrl+K.</b> One search for apps, services, startup entries, pages and actions.</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/background.png" alt="Processes with the Aurora background"><br><sub><b>Backgrounds.</b> Aurora, Dusk, Mesh, Dots, Grid, or your own picture.</sub></td>
+    <td><img src="docs/screenshots/background.png" alt="Processes with one of your own pictures as the background"><br><sub><b>Backgrounds.</b> Your own pictures, or Aurora, Dusk, Mesh, Dots and Grid.</sub></td>
     <td><img src="docs/screenshots/overview-light.png" alt="Overview in the light theme"><br><sub><b>Light theme.</b> Follows Windows, or pick one.</sub></td>
   </tr>
 </table>
 
 <sub>Taken on a Lenovo Legion 5 laptop with <b>Hide personal info</b> turned on.</sub>
+
+## Download the beta
+
+The easiest way: open **[Releases](https://github.com/seoedw/syslens-the-better-task-manager/releases)** and download **SysLens Beta 1.4.0** (`SysLens-Beta-1.4.0-portable.zip`). It brings its own Node.js, so there's nothing else to install.
+
+1. Right-click the zip, choose **Properties**, tick **Unblock** if it's there, and click OK. (Windows marks downloaded files; this keeps it from asking about each one.)
+2. Unzip it somewhere permanent, such as Documents.
+3. Double-click **Install SysLens.cmd**. It adds SysLens to the desktop and Start menu with the **Ctrl+Alt+Shift+S** shortcut, and opens it. Or double-click **SysLens.cmd** to just open it.
+
+There's no .exe on purpose: Windows' Smart App Control blocks programs that aren't signed by a known publisher, and SmartScreen warns about them. SysLens runs on Node.js and Microsoft Edge, which are signed, so it works even with Smart App Control on.
 
 ## Install
 
@@ -203,7 +243,7 @@ On a PC that has Node.js, run `npm run portable`. It builds `dist\SysLens-1.3.0-
 
 </details>
 
-**Run as administrator.** Without admin rights, Windows hides a few things (the full paths and command lines of some system processes, and a few protected folders) and won't let you start or stop most services or change other users' processes. Click **Run as administrator** in the sidebar: SysLens opens again as administrator in a new window, and the old one closes.
+**Run as administrator.** Without admin rights, Windows hides a few things (the full paths and command lines of some system processes, and a few protected folders) and won't let you start or stop most services or change other users' processes. Click **Run as administrator** in the sidebar: SysLens first lists everything administrator mode lets you do and asks you to confirm, then opens again as administrator in a new window, and the old one closes. Once it's administrator, clicking **Running as administrator** shows that list again.
 
 ## Keyboard shortcuts
 
@@ -215,12 +255,13 @@ On a PC that has Node.js, run `npm run portable`. It builds `dist\SysLens-1.3.0-
 | `Ctrl` + `,` | Settings |
 | `Ctrl` + `N` | Run new task |
 | `Ctrl` + `Shift` + `C` | Copy a system report |
+| `F11` | Full screen (change the shortcut in Settings) |
 | `?` | Show the keyboard shortcuts |
 | `Ctrl` + `F` or `/` | Search the process list |
 | `↑` `↓` | Move through processes or services |
 | `Enter`, `←` `→` | Expand or collapse an app |
 | `Shift` + `F10` or the Menu key | Right-click menu for the selected row |
-| `Del` | End the selected task (asks first) |
+| `Del` | End the selected task (asks first); for Windows Explorer, restart it |
 | `Shift` + `Del` | End the selected process and everything it started |
 | `Ctrl` + `C` | Copy the selected process's name |
 | `Esc` | Clear the search, or close the details panel |
@@ -233,14 +274,20 @@ Task Manager's process list counts each app's private memory. The rest of "in us
 ### Does SysLens change anything on my PC?
 Only when you ask it to. Ending, suspending or changing the priority or efficiency mode of a process, starting or stopping a service, changing its startup type, and turning a startup entry on or off are all things you pick from a button or a right-click, and anything that could lose work asks first. Critical Windows processes are protected. SysLens never deletes files.
 
+### Can someone see my network details in a screenshot?
+No. **Hide network details** is on unless you turn it off: SysLens's server keeps your Wi-Fi name, IP and MAC addresses, gateway, DNS servers and the addresses your apps connect to out of the window entirely, and draws solid blocks in their place. Since the page never receives them, they can't be read from the screen, a screenshot, a copy or the page itself.
+
 ### Does it send data anywhere?
 No. The server listens on `127.0.0.1` only, and nothing leaves your PC. It looks up the host names of servers your apps connect to through the DNS server you already use (you can turn that off), and **Search online** opens a web search in your browser when you ask for one. If you turn on **Measure internet latency**, it opens a connection to Cloudflare's 1.1.1.1 every 5 seconds without sending anything.
 
 ### How much memory does SysLens use?
-About 180 MB in all on the laptop in the screenshots, a minute after opening: about 127 MB for the window, 39 MB for the server and 14 MB for the small launcher that restarts it if it ever crashes (the first version used 562 MB). **System › About SysLens** shows the live number. The window is a Microsoft Edge app window with software rendering inside its main process, no extensions or background services, and small JavaScript and drawing caches. That saves about 270 MB compared with a normal Edge window. Pages you leave give back their tables and chart buffers, and lists read for a page are let go after 10 idle minutes. A bigger window (or a maximized one on a high-resolution screen) needs a little more for its drawing buffers.
+About 180 MB in all on the laptop in the screenshots (1.3), a minute after opening: about 127 MB for the window, 39 MB for the server and 14 MB for the small launcher that restarts it if it ever crashes (the first version used 562 MB). **System › About SysLens** shows the live number. The window is a Microsoft Edge app window with software rendering inside its main process, no extensions or background services, and small JavaScript and drawing caches. That saves about 270 MB compared with a normal Edge window. Pages you leave give back their tables and chart buffers, and lists read for a page are let go after 10 idle minutes. A bigger window (or a maximized one on a high-resolution screen) needs a little more for its drawing buffers.
 
 ### Why Node.js and an Edge window instead of a normal .exe?
-Windows' Smart App Control blocks unsigned programs, and a self-built desktop app is unsigned. Node.js and Edge are signed, so SysLens runs on PCs with Smart App Control turned on. The portable build carries its own signed copy of Node.js, so it needs nothing installed at all.
+Windows' Smart App Control blocks unsigned programs, and a self-built desktop app is unsigned. Node.js and Edge are signed, so SysLens runs on PCs with Smart App Control turned on. The portable build (and the Beta download) carries its own signed copy of Node.js, so it needs nothing installed at all.
+
+### Which apps does Task Manager restart instead of ending?
+Windows Explorer. Task Manager turns its End task into Restart (Restart task in Windows 11), because Explorer is the taskbar, Start menu and desktop, and is meant to be restarted rather than left closed. SysLens does the same, and also offers **Restart app** for other desktop apps.
 
 ### Can the shortcut use the Fn key?
 No. The Fn key is handled inside the keyboard itself and never reaches Windows, so no app can use it. SysLens uses **Ctrl+Alt+Shift+S**, a combination nothing else on a typical PC claims; pick another in **Settings › Behavior**.
@@ -270,6 +317,7 @@ SysLens reads the same sources Task Manager, Process Explorer and Resource Monit
 | Folder sizes | `FindFirstFileExW` with large fetch, on a pool of worker threads |
 | Startup apps, services, adapters, hardware, security | The registry, Task Scheduler and CIM, read through PowerShell when their page opens |
 | History | The System and Application event logs |
+| Devices and drivers | CIM: `Win32_PnPEntity` (problem codes), `Win32_PnPSignedDriver`, `Win32_SystemDriver` |
 
 | Action | How |
 |---|---|
@@ -279,6 +327,8 @@ SysLens reads the same sources Task Manager, Process Explorer and Resource Monit
 | Switch to, always on top | `SetForegroundWindow`, `SetWindowPos` |
 | Services | `Start-Service`, `Stop-Service` and `Restart-Service`; `sc.exe config` for the startup type |
 | Startup apps | The `StartupApproved` flags Task Manager and Settings use; the Store app's own startup state; `Enable-ScheduledTask` |
+| Restart app | Ends the app's processes, then starts its program again with the arguments read from its own command line |
+| Users | `WTSEnumerateSessions`, `WTSQuerySessionInformation`; `LockWorkStation`, `WTSDisconnectSession`, `WTSLogoffSession` |
 
 The backend is plain Node.js. A small launcher starts the server and restarts it if it crashes or stops responding. The server serves the UI on `127.0.0.1`, opens it in an Edge (or Chrome) `--app` window with its own profile, and keeps running only while that window is open.
 
@@ -288,6 +338,8 @@ The backend is plain Node.js. A small launcher starts the server and restarts it
 - Checks that a PID still belongs to the same process before acting on it.
 - An administrator instance never writes its token to disk or hands it to the window that was already open: it opens its own elevated window, with a browser profile only administrators can change.
 - Refuses network (UNC) paths, so SysLens never makes Windows sign in to another computer with your account.
+- With **Hide network details** on (the default), network addresses and names are removed on the server, before anything is sent to the window.
+- Background pictures are checked to be JPEGs and served only with the session token; only the tools and links on fixed lists can be opened.
 - Service and startup changes accept only names from SysLens's own lists, and values from the page reach PowerShell as data (environment variables), never as code.
 
 <details>
@@ -310,19 +362,29 @@ src/main/            backend (Node.js)
   pdh.js, win32.js     performance counters and Windows API bindings
   insights.js          findings
   knowledge.js         "What is this?" explanations
+  devices.js           devices with problems, drivers and kernel drivers
   storage/             drives, parallel folder scanner, apps, space hogs
 src/renderer/        UI (plain HTML, CSS and JavaScript, no build step)
   js/menu.js           right-click menus
   js/actions.js        what the menus do, Run new task, system report, changelog
-  js/views/            one file per page, including settings.js
+  js/views/            one file per page, including users, devices, tools and settings
 scripts/             self-test, icon, shortcuts, portable build
 docs/screenshots/    the images in this README
 CHANGELOG.md         what changed in each version
+LICENSE              MIT
 ```
 
 `npm run selftest` prints what the collectors see, without the UI.
 
 </details>
+
+## Feedback
+
+Found a bug, or have an idea? **DM `eward.s.asdfjkl` on Discord.** The same name is in SysLens's sidebar and in Settings › About (click it to copy).
+
+## License
+
+[MIT](LICENSE). Made by [seoedw](https://github.com/seoedw).
 
 ## Known limits
 

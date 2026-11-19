@@ -23,8 +23,10 @@ const Actions = (() => {
     const procs = ((App.snap && App.snap.procs) || []).filter((p) => p.group === g.key);
     const live = procs.length ? procs : g.pids.map((pid) => ({ pid, key: null }));
     const prios = new Set(procs.map((p) => p.priority).filter(Boolean));
+    const main = procs.length ? procs.reduce((a, b) => ((b.created || Infinity) < (a.created || Infinity) ? b : a)) : null;
     return {
       kind: 'group',
+      mainPid: main ? main.pid : g.pids[0],
       key: g.key,
       name: g.name,
       exe: g.exe,
@@ -45,6 +47,7 @@ const Actions = (() => {
   function fromProc(p) {
     return {
       kind: 'proc',
+      mainPid: p.pid,
       key: p.key,
       group: p.group,
       name: p.display || p.name,
@@ -164,6 +167,30 @@ const Actions = (() => {
     App.refreshSoon();
   }
 
+  /** Windows Explorer: Task Manager offers Restart in place of End task for it. */
+  const isExplorer = (item) => item && item.exe === 'explorer.exe';
+
+  /** Apps "Restart app" can start again: desktop programs SysLens can read the command line of. */
+  const restartable = (item) => !!item.path && !item.critical && !item.isSelf && !isExplorer(item) && !/\\windowsapps\\/i.test(item.path) && !/^(svchost|dwm|csrss|wininit|services|lsass|smss)\.exe$/.test(item.exe);
+
+  async function restartApp(item) {
+    const admin = App.snap && App.snap.admin;
+    const ok = await U.confirm({
+      title: `Restart ${item.name}?`,
+      body: `${U.esc(item.name)} closes${item.count > 1 ? ` (all ${item.count} of its processes)` : ''} and opens again with the same settings it was started with. <b>Unsaved work in it will be lost.</b>${admin ? '<br><br>Because SysLens is running as administrator, it will start again as administrator.' : ''}`,
+      confirmLabel: 'Restart',
+      danger: true,
+    });
+    if (!ok) return false;
+    U.toast(`Restarting ${item.name}…`, 'info', 2500);
+    const r = await syslens.restartApp(item.targets, item.mainPid);
+    if (r && r.ok) U.toast(`${item.name} restarted.`, 'good');
+    else if (r && /denied/i.test(r.error || '')) adminToast(`Couldn’t restart ${item.name}: ${r.error}.`);
+    else U.toast(`Couldn’t restart ${item.name}: ${(r && r.error) || 'no answer'}.`, 'bad', 7000);
+    App.refreshSoon();
+    return !!(r && r.ok);
+  }
+
   async function switchTo(item) {
     const r = await syslens.switchTo(item.pids);
     if (!r || !r.ok) U.toast((r && r.error) || 'Couldn’t switch to it.', 'warn');
@@ -209,9 +236,10 @@ const Actions = (() => {
     const many = item.kind === 'group' && item.count > 1;
     return [
       item.hasWindow && { label: 'Switch to', icon: 'window', run: () => switchTo(item) },
-      explorer && { label: 'Restart', icon: 'restart', run: restartExplorer },
-      { label: many ? `End task (${item.count} processes)` : 'End task', icon: 'end', danger: true, disabled: item.critical, kbd: 'Del', run: () => endTask(item) },
+      explorer && { label: 'Restart', icon: 'restart', kbd: 'Del', tip: 'Restarts the taskbar, Start menu and desktop; your apps stay open', run: restartExplorer },
+      { label: many ? `End task (${item.count} processes)` : 'End task', icon: 'end', danger: true, disabled: item.critical, kbd: explorer ? '' : 'Del', run: () => endTask(item) },
       { label: 'End process tree', icon: 'tree', danger: true, disabled: item.critical, kbd: 'Shift+Del', run: () => endTask(item, { tree: true }) },
+      restartable(item) && { label: 'Restart app', icon: 'restart', tip: 'Close it and open it again', run: () => restartApp(item) },
       '-',
       { label: 'Efficiency mode', checked: item.eco, disabled: noEco, tip: noEco ? 'Not available for this process' : 'Lower priority and power-efficient cores (EcoQoS)', run: () => setEfficiency(item, !item.eco) },
       {
@@ -441,6 +469,61 @@ const Actions = (() => {
     U.copy(text, 'System report copied');
   }
 
+  // ---------- administrator mode ----------
+  const ADMIN_CAN = [
+    ['See every detail of every process', 'Full paths, command lines, user accounts and integrity levels of Windows’ own processes and other users’ apps, which a normal account can’t read.'],
+    ['Act on any process', 'End, suspend, or change the priority or efficiency mode of processes run by Windows services and other users.'],
+    ['Control services', 'Start, stop and restart services, and change how they start.'],
+    ['Change startup apps for everyone', 'Turn entries for all users on or off (the machine-wide Run keys and the all-users Startup folder).'],
+    ['Scan protected folders', 'Storage measures folders a normal account can’t open, like other users’ files and parts of Windows.'],
+    ['Manage other people’s sessions', 'Disconnect or sign out other users signed in to this PC (Users page).'],
+    ['Start programs as administrator', 'Run new task and admin-only tools open with full rights, without another prompt.'],
+  ];
+  const ADMIN_NOTES = [
+    'Windows asks for permission first (the User Account Control prompt).',
+    'SysLens opens again in a new administrator window, and this window closes. Your settings carry over.',
+    'What you change can affect the whole PC and everyone who uses it. SysLens still asks before anything risky, and still refuses to touch processes Windows can’t live without.',
+    'The administrator window uses a browser profile of its own that only administrators can change, and its access key is never written to disk.',
+  ];
+  const adminList = () =>
+    `<ul class="admin-list">${ADMIN_CAN.map(([t, d]) => `<li><b>${U.esc(t)}</b><span>${U.esc(d)}</span></li>`).join('')}</ul>`;
+
+  /** "Are you sure?" before restarting as administrator, with everything it changes. */
+  function confirmElevate() {
+    return new Promise((resolve) => {
+      let answered = false;
+      const m = U.modal({
+        title: 'Run SysLens as administrator?',
+        wide: true,
+        body: `<p class="muted" style="margin:0 0 10px">With administrator rights, SysLens can do more than a normal account allows:</p>
+          ${adminList()}
+          <div class="admin-notes"><div class="set-sub" style="margin:4px 0 6px">Good to know</div><ul>${ADMIN_NOTES.map((n) => `<li>${U.esc(n)}</li>`).join('')}</ul></div>
+          <div class="actions"><button class="btn primary" id="ad-yes">Run as administrator</button><button class="btn" data-modal-close>Cancel</button></div>`,
+        onClose: () => {
+          if (!answered) resolve(false);
+        },
+      });
+      m.el.querySelector('#ad-yes').addEventListener('click', () => {
+        answered = true;
+        m.close();
+        resolve(true);
+      });
+      m.el.querySelector('#ad-yes').focus();
+    });
+  }
+
+  /** Already administrator: what that makes possible. */
+  function adminInfo() {
+    U.modal({
+      title: 'Running as administrator',
+      wide: true,
+      body: `<p class="muted" style="margin:0 0 10px">SysLens has administrator rights in this window, so you can now:</p>
+        ${adminList()}
+        <p class="faint" style="margin:12px 0 0">To go back to a normal window, close this one and open SysLens again from its shortcut.</p>
+        <div class="actions"><button class="btn primary" data-modal-close>Got it</button></div>`,
+    });
+  }
+
   // ---------- help and what's new ----------
   function shortcuts() {
     const hk = setting('hotkey');
@@ -544,5 +627,10 @@ const Actions = (() => {
     changelog,
     startupToggle,
     serviceControl,
+    confirmElevate,
+    adminInfo,
+    restartApp,
+    isExplorer,
+    restartable,
   };
 })();

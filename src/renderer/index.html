@@ -33,6 +33,10 @@
             <span>Settings</span>
           </button>
         </div>
+        <button class="feedback" id="feedback" type="button" data-tip="Click to copy the Discord username">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16v10H9l-5 4z" /><path d="M8 9.5h8M8 12.5h5" /></svg>
+          <span>Feedback? DM <b id="feedbackName">eward.s.asdfjkl</b> on Discord</span>
+        </button>
         <div class="sidebar-foot">
           <div class="foot-block">
             <div class="foot-label">Update speed</div>
@@ -58,6 +62,9 @@
           <button class="topbtn" id="topRun" type="button" data-tip="Run new task (Ctrl+N)">
             <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>
           </button>
+          <button class="topbtn" id="topFull" type="button" data-tip="Full screen (F11)">
+            <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>
+          </button>
           <div class="top-stats" id="topStats"></div>
         </header>
         <section class="view" id="view-overview"></section>
@@ -70,6 +77,9 @@
         <section class="view" id="view-services"></section>
         <section class="view" id="view-history"></section>
         <section class="view" id="view-system"></section>
+        <section class="view" id="view-users"></section>
+        <section class="view" id="view-devices"></section>
+        <section class="view" id="view-tools"></section>
         <section class="view" id="view-settings"></section>
       </main>
     </div>
@@ -101,6 +111,9 @@
     <script src="js/views/services.js"></script>
     <script src="js/views/history.js"></script>
     <script src="js/views/system.js"></script>
+    <script src="js/views/users.js"></script>
+    <script src="js/views/devices.js"></script>
+    <script src="js/views/tools.js"></script>
     <script src="js/views/settings.js"></script>
     <script src="js/palette.js"></script>
     <script src="js/app.js"></script>

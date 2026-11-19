@@ -18,6 +18,9 @@ const Palette = (() => {
     ['services', 'Services', 'Windows services and who made them'],
     ['history', 'History', 'start-ups, sleep, crashes and updates this week'],
     ['system', 'System', 'hardware, Windows, battery health and security'],
+    ['users', 'Users', 'who is signed in and what each session uses'],
+    ['devices', 'Devices', 'devices with problems, drivers and kernel drivers'],
+    ['tools', 'Tools', 'quick fixes and every Windows tool in one place'],
     ['settings', 'Settings', 'theme, colors, background, page order, shortcut and more'],
   ];
 
@@ -35,6 +38,13 @@ const Palette = (() => {
       ['Customize pages and their order', 'sidebar reorder hide pages tabs', () => App.go('settings', { section: 'pages' })],
       ['Change the background', 'wallpaper picture image appearance', () => App.go('settings', { section: 'appearance' })],
       [set.latency ? 'Stop measuring internet latency' : 'Measure internet latency', 'ping latency internet speed', () => App.saveSettings({ latency: !set.latency })],
+      [document.fullscreenElement ? 'Exit full screen' : 'Full screen', 'fullscreen f11 maximize window', () => App.toggleFullscreen()],
+      ['Lock this PC', 'lock windows+l away', () => syslens.users().then((u) => u && u.current != null && syslens.userAction(u.current, 'lock'))],
+      ['Flush the DNS cache', 'dns network fix websites ipconfig', () => syslens.flushDns().then((r) => U.toast(r && r.ok ? 'DNS cache cleared.' : 'Couldn’t clear it.', r && r.ok ? 'good' : 'bad'))],
+      ['Open Device Manager', 'devices drivers hardware devmgmt', () => syslens.openTool('devmgmt')],
+      ['Upload a background picture', 'wallpaper picture image personal gallery', () => App.go('settings', { section: 'appearance' })],
+      ['Send feedback (copy the Discord username)', 'feedback discord contact bug report', () => App.copyFeedback()],
+      ['Open SysLens on GitHub', 'github repo source releases', () => syslens.openLink('repo')],
       ['Open Task Manager', 'taskmgr windows', () => syslens.openSettings('taskmgr')],
       ['Open Resource Monitor', 'resmon windows', () => syslens.openSettings('resmon')],
       ['Scan drive C: for what is using space', 'storage scan disk folders', () => App.go('storage', { scan: 'C:\\' })],

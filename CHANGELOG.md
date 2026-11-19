@@ -3,6 +3,39 @@
 Every SysLens release and what changed in it. SysLens shows the newest entry once after it
 updates (Settings › About › What’s new shows it again).
 
+## [1.4.0] - 2026-11-19 (Beta)
+
+The first beta release: download **SysLens Beta 1.4.0** from the Releases page. It brings its own Node.js, so there's nothing else to install.
+
+### Added
+
+- **Your own background pictures.** Upload up to 12 (or drop them onto Settings), click one to use it, and choose Fill or Fit and a softening blur.
+- **Opens at Task Manager's size:** exactly where and as big as Task Manager opens on your PC (its own saved window), or a Task Manager-like 1000 × 700 if it has none. Settings › Behavior › When SysLens opens can switch to the size from last time, maximized, or **full screen**.
+- **Full screen:** a button in the title bar, and a shortcut you can change in Settings (F11, Edge's own full screen, by default).
+- **Users page** (like Task Manager's Users tab): who's signed in, what each session is running and using, and Lock, Switch user and Sign out.
+- **Devices page:** devices Windows reports a problem with (Device Manager's yellow triangles, in plain words), every device driver with its maker, version and date, and the kernel drivers loaded right now, with third-party ones easy to pick out. Overview says when a device has a problem.
+- **Tools page:** quick fixes (flush the DNS cache, restart Windows Explorer, run a task, copy a system report, lock the PC) and 30 Windows tools, each with a line on what it's for.
+- **Restart, like Task Manager:** Windows Explorer's End task becomes **Restart task** (button, details panel, Delete key and right-click). Other desktop apps get **Restart app**, which closes the app and opens it again with the same settings.
+- **Run as administrator asks first** and lists everything administrator mode lets you do. Once SysLens is administrator, clicking the badge shows that list again.
+- **Notify me about problems** (optional): a Windows notification when something serious comes up while you're in another app.
+- **Feedback:** the sidebar and Settings › About say where to send it (Discord: eward.s.asdfjkl). Click to copy the name.
+- The bottom of Settings links the GitHub repository and says who made SysLens (seoedw).
+- SysLens is now **MIT-licensed** (LICENSE).
+
+### Changed
+
+- **Network details are hidden by default and never reach the window.** That covers your Wi-Fi name, IP and MAC addresses, gateway, DNS servers and who your apps talk to. SysLens's server keeps them back, the page draws solid blocks where they would be, and nothing can be read from the screen, a screenshot or the page itself. Settings › Privacy › Hide network details shows them again.
+- **Hide personal info** covers text with a solid bar instead of blurring it.
+- SysLens opens on the same port each time it can, so the window keeps what it remembers per address (such as notification permission).
+- The portable build is named like its release (SysLens-Beta-1.4.0-portable.zip) and adds `Install SysLens.cmd` and `START HERE.txt`.
+
+### Fixed
+
+- Cancel buttons in dialogs (Run new task and others) now close them; only the ✕ did before.
+- Flush DNS asks for administrator permission, which Windows requires for it.
+- Opening an app from another page now selects it in Processes even when that page hasn’t been shown yet.
+- Driver, BIOS and graphics driver dates showed a day early in time zones west of UTC (Windows stores them in UTC); they now match Device Manager.
+
 ## [1.3.0] - 2026-11-18
 
 ### Added

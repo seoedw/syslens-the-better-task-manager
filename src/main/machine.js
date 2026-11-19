@@ -18,7 +18,7 @@ $bios = Get-CimInstance Win32_BIOS
 $board = Get-CimInstance Win32_BaseBoard
 $enc = Get-CimInstance Win32_SystemEnclosure
 $r.device = [ordered]@{ manufacturer = [string]$cs.Manufacturer; model = [string]$cs.Model; family = [string]$cs.SystemFamily; product = [string]$csp.Version; sku = [string]$cs.SystemSKUNumber; chassis = @($enc.ChassisTypes); pcType = [int]$cs.PCSystemType; hypervisor = [bool]$cs.HypervisorPresent
-  bios = [ordered]@{ vendor = [string]$bios.Manufacturer; version = [string]$bios.SMBIOSBIOSVersion; date = if ($bios.ReleaseDate) { $bios.ReleaseDate.ToString('yyyy-MM-dd') } else { '' } }
+  bios = [ordered]@{ vendor = [string]$bios.Manufacturer; version = [string]$bios.SMBIOSBIOSVersion; date = if ($bios.ReleaseDate) { $bios.ReleaseDate.ToUniversalTime().ToString('yyyy-MM-dd') } else { '' } }
   board = [ordered]@{ manufacturer = [string]$board.Manufacturer; product = [string]$board.Product } }
 $r.device.firmware = if ($env:firmware_type -eq 'Legacy') { 'Legacy BIOS' } elseif ($env:firmware_type) { [string]$env:firmware_type } else { '' }
 $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
@@ -28,7 +28,7 @@ $r.memory = [ordered]@{ slots = [int]$arr.MemoryDevices; maxGB = [math]::Round([
   [ordered]@{ slot = [string]$_.DeviceLocator; bank = [string]$_.BankLabel; manufacturer = ([string]$_.Manufacturer).Trim(); part = ([string]$_.PartNumber).Trim(); capacity = [int64]$_.Capacity; speed = [int]$_.Speed; configured = [int]$_.ConfiguredClockSpeed; type = [int]$_.SMBIOSMemoryType; form = [int]$_.FormFactor; voltage = [int]$_.ConfiguredVoltage }
 }) }
 $r.gpus = @(Get-CimInstance Win32_VideoController | ForEach-Object {
-  [ordered]@{ name = [string]$_.Name; driver = [string]$_.DriverVersion; driverDate = if ($_.DriverDate) { $_.DriverDate.ToString('yyyy-MM-dd') } else { '' }; vendor = [string]$_.AdapterCompatibility; ram = [int64]$_.AdapterRAM; width = [int]$_.CurrentHorizontalResolution; height = [int]$_.CurrentVerticalResolution; refresh = [int]$_.CurrentRefreshRate; bits = [int]$_.CurrentBitsPerPixel; status = [string]$_.Status }
+  [ordered]@{ name = [string]$_.Name; driver = [string]$_.DriverVersion; driverDate = if ($_.DriverDate) { $_.DriverDate.ToUniversalTime().ToString('yyyy-MM-dd') } else { '' }; vendor = [string]$_.AdapterCompatibility; ram = [int64]$_.AdapterRAM; width = [int]$_.CurrentHorizontalResolution; height = [int]$_.CurrentVerticalResolution; refresh = [int]$_.CurrentRefreshRate; bits = [int]$_.CurrentBitsPerPixel; status = [string]$_.Status }
 })
 $sizes = @{}; Get-CimInstance -Namespace root\\wmi -ClassName WmiMonitorBasicDisplayParams | ForEach-Object { $sizes[$_.InstanceName] = @([int]$_.MaxHorizontalImageSize, [int]$_.MaxVerticalImageSize) }
 $r.displays = @(Get-CimInstance -Namespace root\\wmi -ClassName WmiMonitorID | ForEach-Object {

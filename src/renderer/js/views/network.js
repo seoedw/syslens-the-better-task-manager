@@ -134,9 +134,9 @@ const NetworkView = (() => {
     const lis = conns.filter((c) => c.state === 'Listening').length;
     const sums = [];
     if (a) {
-      sums.push(`<div class="sum"><div class="v">${a.wifi ? `${bars(a.wifi.signal)}${U.pii(a.wifi.ssid)}` : U.esc(a.name)}</div><div class="k">${a.wifi ? `Wi-Fi · ${a.wifi.signal}% signal · ${U.esc([a.wifi.band, a.wifi.standard].filter(Boolean).join(' · '))}` : `${U.esc(a.type)} · ${a.speed ? U.bits(a.speed / 8) : ''}`}</div></div>`);
-      sums.push(`<div class="sum"><div class="v">${a.ipv4.length ? U.pii(a.ipv4[0].split('/')[0]) : '—'}</div><div class="k">IPv4 address${a.dhcp ? ' (DHCP)' : ''}</div></div>`);
-      sums.push(`<div class="sum"><div class="v">${a.gateway.length ? U.pii(a.gateway[0]) : '—'}</div><div class="k">Gateway (router)</div></div>`);
+      sums.push(`<div class="sum"><div class="v">${a.wifi ? `${bars(a.wifi.signal)}${U.net(a.wifi.ssid)}` : U.esc(a.name)}</div><div class="k">${a.wifi ? `Wi-Fi · ${a.wifi.signal}% signal · ${U.esc([a.wifi.band, a.wifi.standard].filter(Boolean).join(' · '))}` : `${U.esc(a.type)} · ${a.speed ? U.bits(a.speed / 8) : ''}`}</div></div>`);
+      sums.push(`<div class="sum"><div class="v">${a.ipv4.length ? U.net(a.ipv4[0] === null ? null : a.ipv4[0].split('/')[0]) : '—'}</div><div class="k">IPv4 address${a.dhcp ? ' (DHCP)' : ''}</div></div>`);
+      sums.push(`<div class="sum"><div class="v">${a.gateway.length ? U.net(a.gateway[0]) : '—'}</div><div class="k">Gateway (router)</div></div>`);
     } else if (adapters) {
       sums.push('<div class="sum"><div class="v">Offline</div><div class="k">No connected adapter</div></div>');
     }
@@ -147,6 +147,7 @@ const NetworkView = (() => {
     sums.push(`<div class="sum"><div class="v">${connsAt ? U.num(est) : '—'}</div><div class="k">Connections open${connsAt ? ` · ${U.num(lis)} listening` : ''}</div></div>`);
     if (s.latency) sums.push(`<div class="sum"><div class="v">${s.latency.ms == null ? 'Lost' : `${Math.round(s.latency.ms)} <small>ms</small>`}</div><div class="k">Internet latency · ${U.esc(s.latency.target)}</div></div>`);
     else if (App.settings && !App.settings.latency) sums.push('<div class="sum"><div class="v"><button class="link" data-latency-on>Measure</button></div><div class="k">Internet latency (off)</div></div>');
+    if (adapters && adapters.redacted) sums.push('<div class="note">Your network details (Wi-Fi name, addresses, MAC addresses and who your apps talk to) are hidden and never reach this window. <button class="link" data-go="settings" data-section="privacy">Show them</button> in Settings › Privacy.</div>');
     const html = sums.join('');
     const el = U.$('#nw-sum');
     if (el.innerHTML !== html) el.innerHTML = html;
@@ -176,6 +177,8 @@ const NetworkView = (() => {
   // ---------- adapters ----------
   function renderAdapters() {
     const list = (adapters && adapters.list) || [];
+    // A list of addresses, or one block when they were withheld.
+    const addrs = (arr, sep, mono = false) => (arr.length && arr.every((x) => x === null) ? U.net(null) : arr.map((x) => (mono ? `<span class="mono">${U.net(x)}</span>` : U.net(x))).join(sep));
     U.$('#nw-ad-sub').textContent = list.length ? `${list.filter((a) => a.up).length} connected of ${list.length}` : '';
     U.$('#nw-adapters').innerHTML = list.length
       ? list
@@ -186,15 +189,15 @@ const NetworkView = (() => {
                 <div style="min-width:0"><div class="nm">${U.esc(a.name)}</div><div class="ds ellipsis">${U.esc(a.description)}</div></div>
                 <span class="right" style="margin-left:auto">${U.status(a.status, a.up ? 'ok' : 'off')}</span></div>
               ${U.props([
-                w && ['Network', `${bars(w.signal)}${U.pii(w.ssid)} <span class="sub">${w.signal}%</span>`],
+                w && ['Network', `${bars(w.signal)}${U.net(w.ssid)} <span class="sub">${w.signal}%</span>`],
                 w && ['Wi-Fi', U.esc([w.band, w.channel && `channel ${w.channel}`, w.standard || w.radio].filter(Boolean).join(' · '))],
                 w && (w.rx || w.tx) && ['Link rate', `${w.rx} Mbps down · ${w.tx} Mbps up`],
                 !w && a.speed > 0 && ['Link speed', U.bits(a.speed / 8)],
-                a.ipv4.length && ['IPv4', a.ipv4.map((x) => U.pii(x)).join('<br>')],
-                a.ipv6.length && ['IPv6', a.ipv6.slice(0, 2).map((x) => `<span class="mono">${U.pii(x)}</span>`).join('<br>')],
-                a.gateway.length && ['Gateway', a.gateway.map((x) => U.pii(x)).join(', ')],
-                a.dns.length && ['DNS servers', a.dns.map((x) => U.pii(x)).join(', ')],
-                a.mac && ['MAC address', `<span class="mono">${U.pii(a.mac)}</span>`],
+                a.ipv4.length && ['IPv4', addrs(a.ipv4, '<br>')],
+                a.ipv6.length && ['IPv6', addrs(a.ipv6.slice(0, 2), '<br>', true)],
+                a.gateway.length && ['Gateway', addrs(a.gateway, ', ')],
+                a.dns.length && ['DNS servers', addrs(a.dns, ', ')],
+                (a.mac || a.mac === null) && ['MAC address', `<span class="mono">${U.net(a.mac)}</span>`],
                 a.up && a.dhcp != null && ['Addressing', a.dhcp ? 'Automatic (DHCP)' : 'Manual'],
                 a.driver && ['Driver', U.esc(a.driver)],
               ])}
@@ -218,7 +221,7 @@ const NetworkView = (() => {
     return p ? { name: p.display || p.name, path: p.path, isWindows: p.isWindows, exe: p.name } : { name: `PID ${c.pid}`, path: null };
   }
 
-  const scope = (addr) => (addr === '0.0.0.0' || addr === '::' ? 'All networks' : addr === '127.0.0.1' || addr === '::1' ? 'This PC only' : addr);
+  const scope = (addr) => (addr === '0.0.0.0' || addr === '::' ? 'All networks' : addr === '127.0.0.1' || addr === '::1' ? 'This PC only' : addr == null ? null : addr);
 
   function renderListening() {
     const map = procs();
@@ -236,7 +239,7 @@ const NetworkView = (() => {
       ? `<table class="list-table"><tbody>${list
           .map((l) => {
             const app = appOf(l, map);
-            const where = l.scopes.map((x) => (/^(All networks|This PC only)$/.test(x) ? U.esc(x) : U.pii(x))).join(', ');
+            const where = l.scopes.map((x) => (x && /^(All networks|This PC only)$/.test(x) ? U.esc(x) : U.net(x))).join(', ');
             return `<tr class="hov" data-cpid="${l.pid}" data-port="${l.port}"><td style="width:70px" class="mono">${l.port}</td><td><div class="appcell" data-pid="${l.pid}" style="cursor:pointer">${U.icon(app.path, app.isWindows ? U.WIN_ICON : undefined)}<span class="ellipsis">${U.esc(app.name)}</span></div></td><td class="faint ellipsis" style="width:38%">${[l.service && U.esc(l.service), where].filter(Boolean).join(' · ')}</td></tr>`;
           })
           .join('')}</tbody></table>`
@@ -249,11 +252,11 @@ const NetworkView = (() => {
     U.$$('#nw-filter button').forEach((b) => b.classList.toggle('on', b.dataset.f === st.filter));
     const map = procs();
     let list = conns.filter((c) => (st.filter === 'established' ? c.state === 'Established' : st.filter === 'listening' ? c.state === 'Listening' || c.proto === 'UDP' : true));
-    if (!st.local) list = list.filter((c) => !(c.remote && isLoopback(c.remote)));
+    if (!st.local) list = list.filter((c) => !(c.loop || (c.remote && isLoopback(c.remote))));
     const rows = list.map((c) => ({ c, app: appOf(c, map) }));
     const q = st.q;
     const shown = q
-      ? rows.filter(({ c, app }) => `${app.name} ${app.exe || ''} ${c.pid} ${c.local}:${c.lport} ${c.remote}:${c.rport} ${c.host || ''} ${c.service}`.toLowerCase().includes(q))
+      ? rows.filter(({ c, app }) => `${app.name} ${app.exe || ''} ${c.pid} ${c.local || ''}:${c.lport} ${c.remote || ''}:${c.rport} ${c.host || ''} ${c.service}`.toLowerCase().includes(q))
       : rows;
     const key = {
       app: (r) => r.app.name.toLowerCase(),
@@ -271,10 +274,15 @@ const NetworkView = (() => {
     const body = shown
       .slice(0, 600)
       .map(({ c, app }) => {
-        const remote = c.proto === 'UDP' || c.state === 'Listening' ? `<span class="faint">${U.esc(scope(c.local))}</span>` : `${c.host ? `${U.esc(c.host)} <span class="faint">${U.esc(c.remote)}</span>` : U.esc(c.remote)}`;
+        const local = scope(c.local);
+        const remote = c.proto === 'UDP' || c.state === 'Listening' ? `<span class="faint">${U.net(local)}</span>` : c.host ? `${U.esc(c.host)} <span class="faint">${U.net(c.remote)}</span>` : U.net(c.remote);
         const portNum = c.state === 'Established' ? c.rport : c.lport;
-        return `<tr class="hov" data-cpid="${c.pid}" data-host="${U.esc(c.host || '')}" data-addr="${U.esc(c.state === 'Established' ? c.remote || '' : '')}" data-port="${portNum}"><td><div class="appcell" data-pid="${c.pid}" style="cursor:pointer">${U.icon(app.path, app.isWindows ? U.WIN_ICON : undefined)}<span class="ellipsis">${U.esc(app.name)}</span></div></td>
-          <td class="ellipsis" title="${U.esc(c.host || c.remote)}">${remote}</td>
+        // Withheld details don't go into attributes or tooltips either.
+        const hostAttr = c.host ? ` data-host="${U.esc(c.host)}"` : '';
+        const addrAttr = c.state === 'Established' && c.remote ? ` data-addr="${U.esc(c.remote)}"` : '';
+        const tip = c.host || c.remote ? ` title="${U.esc(c.host || c.remote)}"` : '';
+        return `<tr class="hov" data-cpid="${c.pid}"${hostAttr}${addrAttr} data-port="${portNum}"><td><div class="appcell" data-pid="${c.pid}" style="cursor:pointer">${U.icon(app.path, app.isWindows ? U.WIN_ICON : undefined)}<span class="ellipsis">${U.esc(app.name)}</span></div></td>
+          <td class="ellipsis"${tip}>${remote}</td>
           <td class="mono">${portNum}${c.service ? ` <span class="faint" style="font-family:var(--font)">${U.esc(c.service)}</span>` : ''}</td>
           <td>${c.state ? U.esc(c.state) : '<span class="faint">—</span>'}</td>
           <td class="faint">${c.proto}${c.v6 ? 'v6' : ''}</td>
@@ -285,7 +293,7 @@ const NetworkView = (() => {
       body || `<tr><td colspan="6" class="empty">${connsAt ? 'No connections match.' : 'Reading connections…'}</td></tr>`
     }</tbody>`;
     U.$('#nw-conn-sub').textContent = connsAt ? `${U.num(shown.length)} shown of ${U.num(conns.length)}${shown.length > 600 ? ' (first 600)' : ''}` : '';
-    U.$('#nw-conn-when').textContent = connsAt ? 'Updates every 3 seconds · host names fill in as they resolve' : '';
+    U.$('#nw-conn-when').textContent = connsAt ? (conns.some((c) => c.redacted) ? 'Updates every 3 seconds · addresses hidden' : 'Updates every 3 seconds · host names fill in as they resolve') : '';
   }
 
   function render(s) {
@@ -298,5 +306,13 @@ const NetworkView = (() => {
     if (t) t.innerHTML = '';
   }
 
-  return { init, render, show, hide, title: 'Network' };
+  /** Read everything again (after "Hide network details" changes). */
+  function refresh() {
+    adapters = null;
+    conns = [];
+    connsAt = 0;
+    if (App.current === 'network') show();
+  }
+
+  return { init, render, show, hide, refresh, title: 'Network' };
 })();

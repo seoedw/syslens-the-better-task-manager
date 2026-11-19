@@ -135,9 +135,19 @@ const U = (() => {
     return `<span class="status ${level}">${esc(text)}</span>`;
   }
 
-  /** Text that "Hide personal info" blurs (MAC addresses, network names, serials…). */
+  /** Text that "Hide personal info" covers (serial numbers, window titles…). */
   function pii(text) {
     return `<span class="pii">${esc(text)}</span>`;
+  }
+
+  /**
+   * A network detail (Wi-Fi name, address, MAC, host). With "Hide network details" on, the server
+   * sends null instead of the value, and this draws a solid block in its place: the real value is
+   * never in the page.
+   */
+  function net(value) {
+    if (value === null) return '<span class="redact" title="Hidden by Settings › Privacy › Hide network details"></span>';
+    return esc(value);
   }
 
   // Outline glyphs for lists (events, search results).
@@ -263,7 +273,8 @@ const U = (() => {
     root.querySelector('.modal-backdrop').addEventListener('mousedown', (e) => {
       if (e.target.classList.contains('modal-backdrop')) close();
     });
-    el.querySelector('[data-modal-close]').addEventListener('click', close);
+    // Every close button: the ✕ in the header and any Cancel / Got it in the body.
+    el.querySelectorAll('[data-modal-close]').forEach((b) => b.addEventListener('click', close));
     return { el, close };
   }
 
@@ -490,6 +501,7 @@ const U = (() => {
     props,
     status,
     pii,
+    net,
     glyph,
     confirm,
     modal,

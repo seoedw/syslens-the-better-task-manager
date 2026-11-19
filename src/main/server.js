@@ -21,7 +21,9 @@ const { ServicesService } = require('./services');
 const { StartupService } = require('./startup');
 const { HistoryService } = require('./history');
 const { MachineService } = require('./machine');
-const { Settings, BACKGROUND_FILE } = require('./settings');
+const { Settings } = require('./settings');
+const { DevicesService } = require('./devices');
+const { redactAdapters, redactConnections } = require('./network');
 const { INSTANCE_FILE, readInstance, showExisting } = require('./instance');
 const { iconDataUrl } = require('./icons');
 const w = require('./win32');
@@ -95,6 +97,9 @@ const services = new ServicesService();
 const startup = new StartupService();
 const history = new HistoryService();
 const machine = new MachineService();
+const devices = new DevicesService();
+/** Network details stay on the server unless the user chose to show them. */
+const hideNetwork = () => settings.get('hideNetwork') || settings.get('privacy');
 let HANDLERS = {};
 const clients = new Map(); // event-stream response -> { page, needsFull, leaving }
 let everConnected = false;
@@ -202,9 +207,75 @@ function ownWindows() {
   }
 }
 
+/**
+ * Where "Task Manager size" puts the window, in screen pixels: exactly where and as big as Task
+ * Manager opens on this PC (its own saved window, %LOCALAPPDATA%\Microsoft\Windows\TaskManager\
+ * settings.json), or, if it never saved one, a Task Manager-like 1000 x 700 in the middle of the
+ * main screen.
+ */
+function taskManagerBounds() {
+  let r = null;
+  try {
+    const tm = JSON.parse(fs.readFileSync(path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'Windows', 'TaskManager', 'settings.json'), 'utf8'));
+    const p = tm && tm.FullPosition;
+    if (p && Number.isInteger(p.Left) && Number.isInteger(p.Right)) r = { x: p.Left, y: p.Top, w: p.Right - p.Left, h: p.Bottom - p.Top };
+  } catch {
+    /* no saved Task Manager window */
+  }
+  try {
+    const area = r ? w.workAreaAt(r.x + 20, r.y + 20) : null;
+    if (r && area && area.onScreen && r.w >= 400 && r.h >= 300) {
+      // Keep it on that screen.
+      r.w = Math.min(r.w, area.w);
+      r.h = Math.min(r.h, area.h);
+      r.x = Math.max(area.x, Math.min(r.x, area.x + area.w - r.w));
+      r.y = Math.max(area.y, Math.min(r.y, area.y + area.h - r.h));
+      return r;
+    }
+    const main = w.workAreaAt(0, 0);
+    if (!main) return null;
+    const scale = w.screenScale();
+    const width = Math.min(Math.round(1000 * scale), main.w);
+    const height = Math.min(Math.round(700 * scale), main.h);
+    return { x: main.x + Math.round((main.w - width) / 2), y: main.y + Math.round((main.h - height) / 2), w: width, h: height };
+  } catch {
+    return null;
+  }
+}
+
+let placement = null; // { bounds, until }: size the window like Task Manager's once it appears
+
 function openWindow() {
-  shellx.openAppWindow(appUrl(port, token), PROFILE_DIR, { elevated: ADMIN });
+  const start = settings.get('windowStart');
+  const bounds = start === 'default' ? taskManagerBounds() : null;
+  let size = null;
+  if (bounds) {
+    // Edge takes these in device-independent pixels; the exact pixels are set once the window shows.
+    const scale = w.screenScale() || 1;
+    size = { x: Math.round(bounds.x / scale), y: Math.round(bounds.y / scale), w: Math.round(bounds.w / scale), h: Math.round(bounds.h / scale) };
+    placement = { bounds, until: Date.now() + 20000 };
+    placeSoon();
+  }
+  shellx.openAppWindow(appUrl(port, token), PROFILE_DIR, { elevated: ADMIN, start, size });
   windowOpenedAt = Date.now();
+}
+
+/** Put the new window exactly where Task Manager's would be (checks a few times a second). */
+function placeSoon() {
+  if (!placement) return;
+  const win = ownWindows()[0];
+  if (win) {
+    const now = w.windowRect(win.hwnd);
+    const b = placement.bounds;
+    if (!now || Math.abs(now.x - b.x) > 2 || Math.abs(now.y - b.y) > 2 || Math.abs(now.w - b.w) > 2 || Math.abs(now.h - b.h) > 2) w.placeWindow(win.hwnd, b);
+    placement = null;
+    return;
+  }
+  if (Date.now() > placement.until) {
+    placement = null;
+    return;
+  }
+  setTimeout(placeSoon, 250);
 }
 
 /** Bring the window forward, or open one if it was closed. */
@@ -241,6 +312,30 @@ function switchTo(pids) {
   const ok = w.focusWindow(win.hwnd);
   if (ok && settings.get('minimizeOnSwitch')) for (const own of ownWindows()) w.minimizeWindow(own.hwnd);
   return { ok };
+}
+
+/**
+ * "Restart app": end every process of an app, wait for its main process to go, then start its
+ * program again with the same arguments. What runs comes from the process itself.
+ */
+async function restartApp(targets, mainPid) {
+  const info = Number.isInteger(mainPid) ? monitor.procs.relaunchInfo(mainPid) : null;
+  if (!info) return { ok: false, error: 'This one can’t be restarted from SysLens' };
+  const list = cleanTargets(targets);
+  if (!list.some((t) => t.pid === mainPid)) list.push({ pid: mainPid, key: null });
+  const res = monitor.procs.kill(list);
+  if (!res.some((r) => r.ok)) return { ok: false, error: (res[0] && res[0].error) || 'Couldn’t end it' };
+  for (let i = 0; i < 50; i++) {
+    await sleep(200);
+    try {
+      process.kill(mainPid, 0);
+    } catch (err) {
+      if (err.code === 'ESRCH') break;
+    }
+  }
+  await sleep(300); // single-instance apps let go of their lock a moment after exiting
+  const r = await shellx.startProgram(info.path, info.args);
+  return r.ok ? { ok: true, elevated: ADMIN } : r;
 }
 
 /** End Windows Explorer and make sure it comes back (Windows restarts it on its own). */
@@ -384,6 +479,11 @@ function appInfo() {
     appDir: APP_DIR,
     portable: path.dirname(process.execPath).toLowerCase().startsWith(APP_DIR.toLowerCase()),
     latencyTarget: LATENCY_TARGET.label,
+    channel: (pkg.syslens && pkg.syslens.channel) || '',
+    author: (pkg.syslens && pkg.syslens.author) || '',
+    discord: (pkg.syslens && pkg.syslens.discord) || '',
+    license: pkg.license || '',
+    repo: 'github.com/seoedw/syslens-the-better-task-manager',
   };
 }
 
@@ -414,6 +514,7 @@ function sweepCaches() {
     services.at = 0;
   }
   if (idle('startup')) startup.cache = null;
+  if (idle('devices') && !devices.loading) devices.cache = null;
   if (idle('adapters')) {
     network.adapters = null;
     network.adaptersAt = 0;
@@ -458,11 +559,34 @@ function buildHandlers() {
     'settings:get': () => settings.get(),
     'settings:set': (patch) => settings.set(patch),
     'settings:reset': () => settings.reset(),
-    'settings:background': (dataUrl) => settings.setBackgroundImage(dataUrl),
+    'bg:list': () => settings.pictures(),
+    'bg:add': (dataUrl, thumbUrl) => settings.addPicture(dataUrl, thumbUrl),
+    'bg:remove': (id) => settings.removePicture(id),
+    'users:list': () => {
+      const own = monitor.procs.current.get(process.pid);
+      return { sessions: w.sessions(), current: own ? own.session : null };
+    },
+    'users:action': (id, action) => {
+      if (!Number.isInteger(id) || !['lock', 'disconnect', 'logoff'].includes(action)) return { ok: false, error: 'Unknown action' };
+      const own = monitor.procs.current.get(process.pid);
+      if (action === 'lock') return own && own.session === id ? { ok: w.lockWorkstation() } : { ok: false, error: 'Only your own session can be locked' };
+      return w.sessionAction(id, action);
+    },
+    'devices:get': (refresh) => touch('devices', devices.all(!!refresh)),
+    'devices:problems': (refresh) => devices.problems(!!refresh),
+    'tool:open': (id) => shellx.openTool(id),
+    'tool:flushDns': () => shellx.flushDns(),
+    'shell:openLink': (id) => shellx.openLink(id),
     'machine:get': (refresh) => touch('machine', machine.get(!!refresh)),
-    'net:connections': (opts) =>
-      network.connections({ pid: opts && Number.isInteger(opts.pid) ? opts.pid : null, resolve: settings.get('resolveHosts') && !(opts && opts.resolve === false) }),
-    'net:adapters': (refresh) => touch('adapters', network.adapterInfo(!!refresh)),
+    'net:connections': (opts) => {
+      const hidden = hideNetwork();
+      const list = network.connections({ pid: opts && Number.isInteger(opts.pid) ? opts.pid : null, resolve: !hidden && settings.get('resolveHosts') && !(opts && opts.resolve === false) });
+      return hidden ? redactConnections(list) : list;
+    },
+    'net:adapters': async (refresh) => {
+      const data = await touch('adapters', network.adapterInfo(!!refresh));
+      return hideNetwork() ? redactAdapters(data) : data;
+    },
     'services:list': (refresh) => touch('services', services.list(!!refresh)),
     'svc:control': (name, action) => touch('services', services.control(name, action)),
     'svc:startType': (name, type) => touch('services', services.setStartType(name, type)),
@@ -477,6 +601,8 @@ function buildHandlers() {
     'proc:suspend': (targets, on) => monitor.procs.suspend(cleanTargets(targets), !!on),
     'proc:switchTo': (pids) => switchTo(pids),
     'proc:restartExplorer': () => restartExplorer(),
+    'proc:restartApp': (targets, mainPid) => restartApp(targets, mainPid),
+    'proc:canRestart': (pid) => !!(Number.isInteger(pid) && monitor.procs.relaunchInfo(pid)),
     'task:run': (command, admin) => shellx.runTask(command, !!admin),
     icon: (p) => (shellx.isSafePath(p) ? iconDataUrl(p) : null),
     'shell:showItem': (p) => shellx.showItem(p),
@@ -590,10 +716,12 @@ function serveStatic(pathname, res) {
   });
 }
 
-/** The background picture. CSS can't send headers, so the token comes in the query instead. */
+/** A background picture (or its thumbnail). CSS can't send headers, so the token comes in the query. */
 function serveBackground(url, res) {
   if (!sameSecret(url.searchParams.get('t'), token)) return send(res, 403, 'Forbidden', 'text/plain');
-  fs.readFile(BACKGROUND_FILE, (err, data) => {
+  const file = settings.pictureFile(url.searchParams.get('id'), url.searchParams.get('thumb') === '1');
+  if (!file) return send(res, 404, 'Not found', 'text/plain');
+  fs.readFile(file, (err, data) => {
     if (err) return send(res, 404, 'Not found', 'text/plain');
     send(res, 200, data, MIME['.jpg']);
   });
@@ -779,6 +907,17 @@ function onSettingsChanged(changed) {
     });
   }
   if ('latency' in changed && !changed.latency) latency = null;
+  // Picked "Maximized" for when SysLens opens: show it now too. (Full screen is entered by the
+  // window itself, which needs the click that changed the setting.)
+  if (changed.windowStart === 'maximized') for (const win of ownWindows()) w.maximizeWindow(win.hwnd);
+  if (changed.windowStart === 'default') {
+    const b = taskManagerBounds();
+    for (const win of ownWindows()) {
+      if (!b) break;
+      if (w.api.IsZoomed(win.hwnd)) w.api.ShowWindow(win.hwnd, 9 /* SW_RESTORE */);
+      w.placeWindow(win.hwnd, b);
+    }
+  }
 }
 
 async function main() {
@@ -818,8 +957,18 @@ async function main() {
       log(`port ${argv.port} is no longer free (${err.code}); opening a new window`);
       port = await listenWithRetry(0, 0);
     }
+  } else if (Number(argv.port)) {
+    port = await listenWithRetry(Number(argv.port), 0);
   } else {
-    port = await listenWithRetry(Number(argv.port) || 0, 0);
+    // The same port every time it's free, so the window keeps what the browser remembers per
+    // address (notification permission, storage). Waits a moment for a closing SysLens to let go.
+    const preferred = settings.get('port') || 41000 + crypto.randomInt(8000);
+    try {
+      port = await listenWithRetry(preferred, 3000);
+    } catch {
+      port = await listenWithRetry(0, 0);
+    }
+    if (!ADMIN && port !== settings.get('port')) settings.set({ port });
   }
 
   if (!DEV) writeInstance();

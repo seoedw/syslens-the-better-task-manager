@@ -412,6 +412,15 @@ const Processes = (() => {
     const rows = st.mode === 'grouped' ? rowsGrouped(q) : st.mode === 'flat' ? rowsFlat(q) : rowsTree(q);
     U.$('#pr-body').innerHTML = rows.length ? rows.join('') : `<tr><td colspan="${visibleCols().length}"><div class="empty">No processes match “${U.esc(st.q)}”.</div></td></tr>`;
     U.$('#pr-end').disabled = !st.sel;
+    const selItem = st.sel ? selectedItem() : null;
+    const explorerSel = Actions.isExplorer(selItem);
+    const endBtn = U.$('#pr-end');
+    const endLabel = explorerSel ? 'Restart task' : 'End task';
+    if (endBtn.textContent !== endLabel) {
+      endBtn.textContent = endLabel;
+      endBtn.classList.toggle('danger', !explorerSel);
+      endBtn.title = explorerSel ? 'Restart Windows Explorer (Delete)' : 'End task (Delete)';
+    }
     const shown = st.mode === 'grouped' ? `${rows.length} rows` : `${order.length} processes`;
     U.$('#pr-status').innerHTML = `<span><b>${U.num(snap.totals.processes)}</b> processes</span><span><b>${U.num(snap.totals.threads)}</b> threads</span><span><b>${U.num(snap.totals.handles)}</b> handles</span><span class="faint">${shown} shown</span><span class="faint" style="margin-left:auto">Memory = private working set (matches Task Manager)</span>`;
   }
@@ -528,7 +537,7 @@ const Processes = (() => {
     const rows = [...est, ...lis]
       .slice(0, 8)
       .map(
-        (c) => `<div class="conn-row"><span class="who" title="${U.esc(c.host || c.remote)}">${c.state === 'Listening' ? `Listening on port ${c.lport}` : U.esc(c.host || c.remote)}</span><span class="faint">${c.state === 'Listening' ? '' : `${c.rport}${c.service ? ` ${U.esc(c.service)}` : ''}`}</span></div>`,
+        (c) => `<div class="conn-row"><span class="who"${c.host || c.remote ? ` title="${U.esc(c.host || c.remote)}"` : ''}>${c.state === 'Listening' ? `Listening on port ${c.lport}` : U.net(c.host || c.remote || null)}</span><span class="faint">${c.state === 'Listening' ? '' : `${c.rport}${c.service ? ` ${U.esc(c.service)}` : ''}`}</span></div>`,
       )
       .join('');
     return `<section><h4>Network <span class="faint">· ${est.length} connected${lis.length ? `, ${lis.length} listening` : ''}${list.length - est.length - lis.length > 0 ? `, ${list.length - est.length - lis.length} other` : ''}</span></h4>${rows}${
@@ -595,7 +604,7 @@ const Processes = (() => {
         <div class="drawer-head">${U.icon(g.path, g.type === 'windows' ? U.WIN_ICON : undefined)}<div><div class="title">${U.esc(g.name)}</div>
           <div class="subtitle">${g.count} processes · ${U.esc(g.exe)}${g.company ? ` · ${U.esc(g.company)}` : ''}</div></div>
           <button class="btn ghost sm x" data-close title="Close">✕</button></div>
-        <div class="drawer-actions"><button class="btn danger sm" data-end ${g.critical ? 'disabled' : ''}>End task (${g.count} processes)</button><button class="btn sm" data-actions>More ▾</button>${
+        <div class="drawer-actions">${g.exe === 'explorer.exe' ? '<button class="btn sm primary" data-end>Restart</button>' : `<button class="btn danger sm" data-end ${g.critical ? 'disabled' : ''}>End task (${g.count} processes)</button>`}<button class="btn sm" data-actions>More ▾</button>${
           g.path ? `<button class="btn sm" data-loc="${U.esc(g.path)}">Open file location</button>` : ''
         }</div>
         ${sparksBlock()}
@@ -627,7 +636,7 @@ const Processes = (() => {
         <div class="drawer-head">${U.icon(p.path, p.isWindows ? U.WIN_ICON : undefined)}<div><div class="title">${U.esc(p.display)}</div>
           <div class="subtitle">${U.esc(p.name)} · PID ${p.pid}${p.company ? ` · ${U.esc(p.company)}` : ''}</div></div>
           <button class="btn ghost sm x" data-close title="Close">✕</button></div>
-        <div class="drawer-actions"><button class="btn danger sm" data-end ${p.critical ? 'disabled' : ''}>End task</button><button class="btn sm" data-actions>More ▾</button>${
+        <div class="drawer-actions">${p.exe === 'explorer.exe' ? '<button class="btn sm primary" data-end>Restart</button>' : `<button class="btn danger sm" data-end ${p.critical ? 'disabled' : ''}>End task</button>`}<button class="btn sm" data-actions>More ▾</button>${
           p.path && !p.pathGuessed ? `<button class="btn sm" data-loc="${U.esc(p.path)}">Open file location</button>` : ''
         }</div>
         ${p.critical ? '<div class="notice warn"><svg viewBox="0 0 24 24"><path d="M1 21h22L12 2zm12-3h-2v-2h2zm0-4h-2v-4h2z"/></svg><div>Critical Windows process — ending it would crash Windows, so SysLens won’t.</div></div>' : ''}
@@ -757,6 +766,7 @@ const Processes = (() => {
   async function endSelected(tree = false) {
     const item = selectedItem();
     if (!item) return;
+    if (!tree && Actions.isExplorer(item)) return Actions.restartExplorer();
     const done = await Actions.endTask(item, { tree });
     if (done) {
       st.sel = null;
@@ -824,6 +834,11 @@ const Processes = (() => {
 
   function show(opts = {}) {
     if (opts.sort) st.sort = { key: opts.sort, dir: -1 };
+    // Opened for a specific app before this page ever drew: use the latest data to find it.
+    if (!snap && App.snap) {
+      snap = App.snap;
+      reindex();
+    }
     if (opts.group && snap) {
       st.mode = 'grouped';
       st.filter = 'all';

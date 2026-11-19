@@ -1,7 +1,7 @@
 {
   "name": "syslens",
   "productName": "SysLens",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "description": "SysLens, the better Task Manager for Windows: every process with Task Manager’s actions and more, where your RAM really goes, what fills your disk, what starts with Windows and what your PC did while you were away.",
   "homepage": "https://github.com/seoedw/syslens-the-better-task-manager#readme",
@@ -9,6 +9,8 @@
     "type": "git",
     "url": "https://github.com/seoedw/syslens-the-better-task-manager.git"
   },
+  "license": "MIT",
+  "author": "seoedw (https://github.com/seoedw)",
   "main": "src/main/launcher.js",
   "scripts": {
     "start": "node --jitless src/main/launcher.js",
@@ -26,5 +28,10 @@
   },
   "os": [
     "win32"
-  ]
+  ],
+  "syslens": {
+    "channel": "beta",
+    "author": "seoedw",
+    "discord": "eward.s.asdfjkl"
+  }
 }

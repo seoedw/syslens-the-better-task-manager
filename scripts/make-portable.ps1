@@ -1,4 +1,4 @@
-# Builds dist\SysLens-<version>-portable: SysLens with its own copy of Node.js (the signed
+# Builds dist\SysLens[-Beta]-<version>-portable: SysLens with its own copy of Node.js (the signed
 # node.exe from this PC, so Smart App Control still trusts it). The folder runs on PCs without
 # Node.js: double-click SysLens.cmd, or run scripts\install-shortcut.ps1 -Desktop in it for
 # shortcuts. With -Zip it is also packed into a .zip next to it. -OutDir builds somewhere other
@@ -8,17 +8,43 @@ param([switch]$Zip, [string]$OutDir = '')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $pkg = Get-Content -LiteralPath (Join-Path $root 'package.json') -Raw | ConvertFrom-Json
-$name = "SysLens-$($pkg.version)-portable"
+# A beta build is named like its release: SysLens-Beta-1.4.0-portable.
+$channel = if ($pkg.syslens -and $pkg.syslens.channel) { (Get-Culture).TextInfo.ToTitleCase($pkg.syslens.channel) } else { '' }
+$name = if ($channel) { "SysLens-$channel-$($pkg.version)-portable" } else { "SysLens-$($pkg.version)-portable" }
 $dist = if ($OutDir) { $OutDir } else { Join-Path $root 'dist' }
 $out = Join-Path $dist $name
 
 if (Test-Path -LiteralPath $out) { Remove-Item -LiteralPath $out -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 
-foreach ($item in 'src', 'assets', 'scripts', 'package.json', 'README.md', 'CHANGELOG.md', 'SysLens.cmd') {
+foreach ($item in 'src', 'assets', 'scripts', 'package.json', 'README.md', 'CHANGELOG.md', 'LICENSE', 'SysLens.cmd') {
   $from = Join-Path $root $item
   if (Test-Path -LiteralPath $from) { Copy-Item -LiteralPath $from -Destination $out -Recurse }
 }
+
+# Two double-click helpers and a short note for people who download the zip.
+@'
+@echo off
+rem Adds SysLens to the desktop and Start menu (with the Ctrl+Alt+Shift+S shortcut), then opens it.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\install-shortcut.ps1" -Desktop
+call "%~dp0SysLens.cmd"
+'@ -replace "`r?`n", "`r`n" | Set-Content -LiteralPath (Join-Path $out 'Install SysLens.cmd') -Encoding ascii -NoNewline
+@"
+SysLens $channel $($pkg.version) - the better Task Manager
+$('=' * 60)
+
+1. Keep this folder somewhere permanent (Documents is fine). Shortcuts point into it.
+2. Double-click "Install SysLens.cmd" to add SysLens to the desktop and Start menu
+   (Ctrl+Alt+Shift+S opens it from anywhere), or "SysLens.cmd" to just open it.
+
+Nothing else to install: Node.js comes with it (runtime\node.exe).
+If Windows says it protected your PC, click "More info" and "Run anyway"; or right-click
+the zip before unzipping, choose Properties and tick "Unblock".
+
+Feedback: DM $($pkg.syslens.discord) on Discord.
+Made by $($pkg.syslens.author): https://github.com/seoedw/syslens-the-better-task-manager
+License: $($pkg.license) (see LICENSE)
+"@ | Set-Content -LiteralPath (Join-Path $out 'START HERE.txt') -Encoding utf8
 
 # Runtime dependencies only: koffi and its prebuilt Windows binary.
 $nm = Join-Path $out 'node_modules'

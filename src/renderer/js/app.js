@@ -1,5 +1,5 @@
 'use strict';
-/* global U, syslens, Palette, Menu, Actions, Overview, Processes, MemoryView, Performance, NetworkView, Storage, StartupView, ServicesView, HistoryView, SystemView, SettingsView */
+/* global U, syslens, Palette, Menu, Actions, Overview, Processes, MemoryView, Performance, NetworkView, Storage, StartupView, ServicesView, HistoryView, SystemView, SettingsView, UsersView, DevicesView, ToolsView */
 
 const App = (() => {
   // Every page, in the default sidebar order. The order and which pages show are settings.
@@ -14,6 +14,9 @@ const App = (() => {
     services: { title: 'Services', view: ServicesView, count: 'navServicesCount', icon: '<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>' },
     history: { title: 'History', view: HistoryView, icon: '<path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"/><path d="M3 4v4.5h4.5"/><path d="M12 7.5V12l3 2"/>' },
     system: { title: 'System', view: SystemView, icon: '<rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/>' },
+    users: { title: 'Users', view: UsersView, icon: '<circle cx="9" cy="8.5" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 5.2a3.5 3.5 0 0 1 0 6.6M18.5 20a6.5 6.5 0 0 0-3-5.5"/>' },
+    devices: { title: 'Devices', view: DevicesView, count: 'navDevicesCount', icon: '<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/>' },
+    tools: { title: 'Tools', view: ToolsView, icon: '<path d="M14.5 6.5a4 4 0 0 0-5.3 5.3L4 17l3 3 5.2-5.2a4 4 0 0 0 5.3-5.3l-2.5 2.5-2.5-.5-.5-2.5z"/>' },
   };
   const DEFAULT_ORDER = Object.keys(PAGES);
   const views = { ...Object.fromEntries(Object.entries(PAGES).map(([k, p]) => [k, p.view])), settings: SettingsView };
@@ -40,6 +43,8 @@ const App = (() => {
     visibleOrder,
     movePage,
     titleOf: (id) => titles[id] || id,
+    toggleFullscreen: (on) => toggleFullscreen(on),
+    copyFeedback: () => copyFeedback(),
   };
   const counts = {};
   let speed = 1000;
@@ -75,7 +80,8 @@ const App = (() => {
       root.dataset.text = String(s.textSize);
       window.dispatchEvent(new Event('resize')); // charts redraw at the new scale
     }
-    if (has('background') || has('backgroundStrength') || has('backgroundVersion')) applyBackground();
+    if (has('background') || has('backgroundStrength') || has('backgroundVersion') || has('backgroundImage') || has('backgroundFit') || has('backgroundBlur')) applyBackground();
+    if (has('hideNetwork') || has('privacy')) NetworkView.refresh();
     if (has('navOrder') || has('navHidden')) renderNav();
     if (has('interval')) {
       speed = s.interval;
@@ -143,10 +149,12 @@ const App = (() => {
     const kind = s.background || 'none';
     root.dataset.bg = kind;
     root.style.setProperty('--bg-strength', String((s.backgroundStrength || 60) / 100));
+    root.dataset.bgFit = s.backgroundFit || 'fill';
+    root.dataset.bgBlur = s.backgroundBlur ? 'on' : 'off';
     const art = document.getElementById('backdrop');
-    if (kind === 'image') {
+    if (kind === 'image' && s.backgroundImage) {
       // The picture is served behind the token; CSS can only pass it in the address.
-      art.style.backgroundImage = `url("/api/background?t=${encodeURIComponent(syslens.token())}&v=${s.backgroundVersion || 0}")`;
+      art.style.backgroundImage = `url("${syslens.pictures.url(s.backgroundImage)}")`;
     } else {
       art.style.backgroundImage = '';
     }
@@ -272,7 +280,7 @@ const App = (() => {
 
   // ---------- navigation ----------
   // Per-process rows are only streamed while a page that lists processes is on screen.
-  const NEEDS_PROCS = new Set(['processes', 'services', 'network']);
+  const NEEDS_PROCS = new Set(['processes', 'services', 'network', 'users']);
   function renewNeeds() {
     if (document.hidden || !NEEDS_PROCS.has(api.current)) return;
     syslens.need({ procs: true }).catch(() => {});
@@ -371,11 +379,13 @@ const App = (() => {
     if (adminShown === admin) return;
     adminShown = admin;
     U.$('#admin').innerHTML = admin
-      ? '<span class="badge-admin">● Running as administrator</span>'
+      ? '<button class="badge-admin" id="btnAdminInfo" data-tip="See what administrator mode lets you do">● Running as administrator</button>'
       : '<button class="btn sm" id="btnElevate" style="width:100%" data-tip="Some details, and changing services and other users’ processes, need administrator rights.">Run as administrator</button>';
   }
 
   async function elevate() {
+    if (api.snap && api.snap.admin) return Actions.adminInfo();
+    if (!(await Actions.confirmElevate())) return;
     const r = await syslens.elevate().catch(() => null);
     if (r && r.ok) U.toast('Opening SysLens as administrator. This window closes once it’s up.', 'info', 8000);
     else U.toast((r && r.error) || 'Could not restart as administrator.', 'warn');
@@ -466,12 +476,51 @@ const App = (() => {
       applyAccent();
     }
     setCount('navProcCount', s.totals.processes);
+    checkAlerts(s);
     const view = views[api.current];
     if (!view) return;
     try {
       view.render(s);
     } catch (err) {
       console.error(err);
+    }
+  }
+
+  // ---------- full screen ----------
+  function toggleFullscreen(on = !document.fullscreenElement) {
+    if (on) document.documentElement.requestFullscreen().catch(() => U.toast('Press F11 for full screen.', 'info', 3000));
+    else if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  }
+
+  // ---------- feedback ----------
+  function copyFeedback() {
+    const name = (api.info && api.info.discord) || '';
+    if (!name) return;
+    U.copy(name, `Discord username ${name} copied. DM it your feedback`);
+  }
+
+  // ---------- alerts ----------
+  // With "Notify me about problems" on, a serious finding that is new (or back after 30 minutes)
+  // shows a Windows notification while SysLens isn't the window you're looking at.
+  const alerted = new Map();
+  function checkAlerts(s) {
+    if (!api.settings || !api.settings.notify || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    if (!document.hidden && document.hasFocus()) return;
+    const now = Date.now();
+    for (const f of s.insights || []) {
+      if (f.level !== 'bad') continue;
+      if (now - (alerted.get(f.title) || 0) < 30 * 60000) continue;
+      alerted.set(f.title, now);
+      try {
+        const n = new Notification(f.title, { body: f.text, icon: '/icon.png', tag: f.title });
+        n.onclick = () => {
+          window.focus();
+          go(f.link || 'overview', f.group ? { group: f.group } : {});
+          n.close();
+        };
+      } catch {
+        /* notifications unavailable */
+      }
     }
   }
 
@@ -486,7 +535,9 @@ const App = (() => {
       { label: 'Always on top', checked: !!(api.settings && api.settings.alwaysOnTop), run: () => saveSettings({ alwaysOnTop: !api.settings.alwaysOnTop }) },
       { label: 'Hide personal info', checked: syslens.privacyActive(), run: () => setPrivacy(!syslens.privacyActive()) },
       '-',
+      { label: document.fullscreenElement ? 'Exit full screen' : 'Full screen', icon: 'window', kbd: 'F11', run: () => toggleFullscreen() },
       { label: 'Keyboard shortcuts', icon: 'info', kbd: '?', run: () => Actions.shortcuts() },
+      { label: 'Send feedback (Discord)', icon: 'copy', run: () => copyFeedback() },
       { label: 'Settings', icon: 'settings', kbd: 'Ctrl+,', run: () => go('settings') },
     ];
   }
@@ -547,8 +598,21 @@ const App = (() => {
   }
 
   // ---------- keyboard ----------
+  /** "Ctrl+Shift+F", "F11"… for a key event, in the form Settings stores shortcuts. */
+  function comboOf(e) {
+    let key = e.code.startsWith('Key') ? e.code.slice(3) : e.code.startsWith('Digit') ? e.code.slice(5) : e.key;
+    if (/^f\d+$/i.test(key)) key = key.toUpperCase();
+    return [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', key].filter(Boolean).join('+');
+  }
+
   function onKeyDown(e) {
     if (document.querySelector('.modal-backdrop') || Palette.isOpen || Menu.isOpen) return;
+    // The full-screen shortcut from Settings. F11 is left to Edge, which has its own full screen.
+    const fsKey = api.settings && api.settings.fullscreenKey;
+    if (fsKey && fsKey !== 'F11' && comboOf(e) === fsKey) {
+      e.preventDefault();
+      return toggleFullscreen();
+    }
     const k = e.key.toLowerCase();
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
     if (e.ctrlKey && !e.shiftKey && k === 'k') {
@@ -593,8 +657,10 @@ const App = (() => {
     U.$('#navSettings').addEventListener('click', () => go('settings'));
     document.addEventListener('click', (e) => {
       const g = e.target.closest('[data-go]');
-      if (g) go(g.dataset.go, g.dataset.sort ? { sort: g.dataset.sort } : g.dataset.group ? { group: g.dataset.group } : {});
+      if (g) go(g.dataset.go, g.dataset.sort ? { sort: g.dataset.sort } : g.dataset.group ? { group: g.dataset.group } : g.dataset.section ? { section: g.dataset.section } : {});
       if (e.target.closest('#btnElevate')) elevate();
+      if (e.target.closest('#btnAdminInfo')) Actions.adminInfo();
+      if (e.target.closest('#feedback')) copyFeedback();
     });
     U.$('#speed').addEventListener('click', (e) => {
       const b = e.target.closest('[data-ms]');
@@ -602,6 +668,8 @@ const App = (() => {
     });
     U.$('#topSearch').addEventListener('click', () => Palette.open());
     U.$('#topRun').addEventListener('click', () => Actions.runTask());
+    U.$('#topFull').addEventListener('click', () => toggleFullscreen());
+    document.addEventListener('fullscreenchange', () => U.$('#topFull').classList.toggle('on', !!document.fullscreenElement));
     document.addEventListener('contextmenu', onContextMenu);
     document.addEventListener('keydown', onKeyDown);
     syslens.onConnection(onConnection);
@@ -632,7 +700,9 @@ const App = (() => {
     const boot = await syslens.ready; // masks and settings are in place before any data
     api.settings = boot.settings;
     api.info = boot.info;
-    U.$('#appVer').textContent = `v${boot.info.version}`;
+    U.$('#appVer').textContent = `v${boot.info.version}${boot.info.channel ? ` ${boot.info.channel}` : ''}`;
+    const fb = U.$('#feedbackName');
+    if (fb) fb.textContent = boot.info.discord || '';
     root.dataset.privacy = syslens.privacyActive() ? 'on' : 'off';
     root.dataset.density = api.settings.density;
     root.dataset.text = String(api.settings.textSize);

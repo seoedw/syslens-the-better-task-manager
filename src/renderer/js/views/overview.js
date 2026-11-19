@@ -94,11 +94,18 @@ const Overview = (() => {
 
   // Only the few facts findings need are kept, not the whole machine report.
   let machineFacts = null;
+  let deviceProblems = null;
   let factsAt = 0;
   async function loadFacts() {
     if (Date.now() - factsAt < 10 * 60000) return;
     factsAt = Date.now();
     if (!StartupView.data) StartupView.load(false);
+    syslens
+      .deviceProblems(false)
+      .then((r) => {
+        deviceProblems = (r && r.list) || [];
+      })
+      .catch(() => {});
     try {
       let m = await syslens.machine(false);
       if (m && m.pending && m.pending.length) {
@@ -137,6 +144,10 @@ const Overview = (() => {
     if (su) {
       const on = su.list.filter((x) => x.enabled).length;
       if (on >= 12) add('info', `${on} apps start with Windows`, 'Each one slows sign-in a little and keeps running in the background. Switch off the ones you don’t need right away.', { link: 'startup', linkLabel: 'Startup apps' });
+    }
+    if (deviceProblems && deviceProblems.length) {
+      const names = deviceProblems.slice(0, 2).map((d) => d.name).join(' and ');
+      add('warn', `${deviceProblems.length === 1 ? 'A device has a problem' : `${deviceProblems.length} devices have problems`}`, `${names}${deviceProblems.length > 2 ? ' and others' : ''}: ${deviceProblems[0].problem.toLowerCase()}. Devices shows what’s wrong with each.`, { link: 'devices', linkLabel: 'Show devices' });
     }
     const m = machineFacts;
     if (m) {

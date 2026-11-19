@@ -68,6 +68,96 @@ function openSettings(page) {
   return true;
 }
 
+// The Tools page. Only these can be opened: each id maps to a fixed program and arguments.
+// Programs that need administrator rights go through Start-Process, which shows the UAC prompt.
+const TOOLS = {
+  devmgmt: ['mmc.exe', ['devmgmt.msc']],
+  diskmgmt: ['mmc.exe', ['diskmgmt.msc']],
+  compmgmt: ['mmc.exe', ['compmgmt.msc']],
+  eventvwr: ['mmc.exe', ['eventvwr.msc']],
+  taskschd: ['mmc.exe', ['taskschd.msc']],
+  services: ['mmc.exe', ['services.msc']],
+  perfmon: ['perfmon.exe', []],
+  reliability: ['perfmon.exe', ['/rel']],
+  resmon: ['resmon.exe', []],
+  msinfo32: ['msinfo32.exe', []],
+  msconfig: ['msconfig.exe', [], true],
+  regedit: ['regedit.exe', [], true],
+  cleanmgr: ['cleanmgr.exe', []],
+  mdsched: ['mdsched.exe', [], true],
+  control: ['control.exe', []],
+  sysprops: ['SystemPropertiesAdvanced.exe', []],
+  envvars: ['rundll32.exe', ['sysdm.cpl,EditEnvironmentVariables']],
+  taskmgr: ['taskmgr.exe', []],
+  cmd: ['cmd.exe', []],
+  powershell: ['powershell.exe', []],
+  terminal: ['wt.exe', []],
+  update: ['explorer.exe', ['ms-settings:windowsupdate']],
+  security: ['explorer.exe', ['windowsdefender:']],
+  storage: ['explorer.exe', ['ms-settings:storagesense']],
+  apps: ['explorer.exe', ['ms-settings:appsfeatures']],
+  startup: ['explorer.exe', ['ms-settings:startupapps']],
+  network: ['explorer.exe', ['ms-settings:network-status']],
+  power: ['explorer.exe', ['ms-settings:powersleep']],
+  display: ['explorer.exe', ['ms-settings:display']],
+  sound: ['explorer.exe', ['ms-settings:sound']],
+  bluetooth: ['explorer.exe', ['ms-settings:bluetooth']],
+  troubleshoot: ['explorer.exe', ['ms-settings:troubleshoot']],
+  recovery: ['explorer.exe', ['ms-settings:recovery']],
+};
+
+async function openTool(id) {
+  if (!Object.prototype.hasOwnProperty.call(TOOLS, id)) return { ok: false, error: 'Unknown tool' };
+  const [exe, args, elevate] = TOOLS[id];
+  if (elevate) {
+    const r = await runPowerShellJson(
+      "try { $p = @{ FilePath = $env:SL_FILE; ErrorAction = 'Stop' }; if ($env:SL_ARGS) { $p.ArgumentList = $env:SL_ARGS }; Start-Process @p; ConvertTo-Json -Compress @{ ok = $true } } catch { ConvertTo-Json -Compress @{ ok = $false; error = [string]$_.Exception.Message } }",
+      30000,
+      { SL_FILE: exe, SL_ARGS: args.join(' ') },
+    );
+    if (r && r.ok) return { ok: true };
+    return { ok: false, error: r && /canceled/i.test(r.error) ? 'Cancelled' : (r && r.error) || 'Couldn’t open it' };
+  }
+  return new Promise((resolve) => {
+    const child = spawn(exe, args, { detached: true, stdio: 'ignore', windowsHide: false });
+    child.once('error', () => resolve({ ok: false, error: `${exe} isn’t available on this PC` }));
+    child.once('spawn', () => {
+      child.unref();
+      resolve({ ok: true });
+    });
+  });
+}
+
+/**
+ * Clear the DNS resolver cache (ipconfig /flushdns). Windows wants administrator rights for it,
+ * so without them it asks first (the UAC prompt), as Run as administrator does.
+ */
+async function flushDns() {
+  const r = await run('ipconfig.exe', ['/flushdns'], 20000);
+  if (r.code === 0) return { ok: true };
+  if (!/elevation/i.test(r.out)) return { ok: false, error: r.out || 'Windows refused' };
+  const ps = await runPowerShellJson(
+    "try { $p = Start-Process -FilePath 'ipconfig.exe' -ArgumentList '/flushdns' -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ErrorAction Stop; ConvertTo-Json -Compress @{ ok = ($p.ExitCode -eq 0) } } catch { ConvertTo-Json -Compress @{ ok = $false; error = [string]$_.Exception.Message } }",
+    120000,
+  );
+  if (ps && ps.ok) return { ok: true };
+  return { ok: false, error: ps && /cancel/i.test(ps.error || '') ? 'Cancelled' : 'Needs administrator rights' };
+}
+
+// Links SysLens opens in the default browser. Only these.
+const LINKS = {
+  repo: 'https://github.com/seoedw/syslens-the-better-task-manager',
+  releases: 'https://github.com/seoedw/syslens-the-better-task-manager/releases',
+  license: 'https://github.com/seoedw/syslens-the-better-task-manager/blob/main/LICENSE',
+  author: 'https://github.com/seoedw',
+};
+
+function openLink(id) {
+  if (!Object.prototype.hasOwnProperty.call(LINKS, id)) return false;
+  launch('explorer.exe', [LINKS[id]]);
+  return true;
+}
+
 /** "Search online", like Task Manager: a Bing search in the default browser. */
 function searchOnline(text) {
   if (typeof text !== 'string') return false;
@@ -116,6 +206,17 @@ async function runTask(command, admin) {
   if (/canceled by the user/i.test(msg)) return { ok: false, error: 'Cancelled' };
   if (/cannot find the file|cannot find/i.test(msg)) return { ok: false, error: `Windows can’t find “${file}”` };
   return { ok: false, error: msg.split('\n')[0] || 'Couldn’t start it' };
+}
+
+/** Start a program again with its own arguments, from its own folder ("Restart app"). */
+async function startProgram(file, args) {
+  if (!isSafePath(file)) return { ok: false, error: 'Can’t start it from here' };
+  const r = await runPowerShellJson(
+    "try { $p = @{ FilePath = $env:SL_FILE; WorkingDirectory = $env:SL_DIR; ErrorAction = 'Stop' }; if ($env:SL_ARGS) { $p.ArgumentList = $env:SL_ARGS }; Start-Process @p; ConvertTo-Json -Compress @{ ok = $true } } catch { ConvertTo-Json -Compress @{ ok = $false; error = [string]$_.Exception.Message } }",
+    30000,
+    { SL_FILE: file, SL_ARGS: args || '', SL_DIR: path.dirname(file) },
+  );
+  return r && r.ok ? { ok: true } : { ok: false, error: (r && r.error) || 'Windows didn’t answer' };
 }
 
 // ---------- start with Windows ----------
@@ -238,8 +339,13 @@ function openAppWindow(url, profileDir, opts = {}) {
     return null;
   }
   fs.mkdirSync(profileDir, { recursive: true });
-  const args = [`--app=${url}`, `--user-data-dir=${profileDir}`, '--no-first-run', '--no-default-browser-check', '--disable-sync', '--window-size=1400,900', ...LEAN_FLAGS];
+  const args = [`--app=${url}`, `--user-data-dir=${profileDir}`, '--no-first-run', '--no-default-browser-check', '--disable-sync', ...LEAN_FLAGS];
   if (opts.elevated) args.push('--do-not-de-elevate');
+  // Settings › Behavior › "When SysLens opens": Task Manager's size (the default), the size it
+  // had last time (Edge remembers that by itself), maximized, or full screen.
+  if (opts.size) args.push(`--window-position=${opts.size.x},${opts.size.y}`, `--window-size=${opts.size.w},${opts.size.h}`);
+  if (opts.start === 'maximized') args.push('--start-maximized');
+  else if (opts.start === 'fullscreen') args.push('--start-fullscreen');
   const child = spawn(exe, args, { detached: true, stdio: 'ignore' });
   child.on('error', () => {});
   return child;
@@ -249,6 +355,11 @@ module.exports = {
   showItem,
   openFolder,
   openSettings,
+  openTool,
+  flushDns,
+  openLink,
+  startProgram,
+  TOOLS,
   searchOnline,
   runTask,
   setAutostart,

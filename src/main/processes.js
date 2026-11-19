@@ -539,6 +539,31 @@ class ProcessMonitor {
     });
   }
 
+  /**
+   * What "Restart app" starts again: the main process's own program and arguments, read from
+   * the process itself (never from the page). Null for what can't be restarted that way:
+   * Windows' own critical processes, services, SysLens, Store apps (they need their package
+   * to start them) and Explorer (which has its own restart).
+   */
+  relaunchInfo(pid) {
+    const p = this.current.get(pid);
+    if (!p) return null;
+    const m = this.meta.get(p.key) || {};
+    if (!m.path || m.guessed || !m.cmd || p.critical || p.isSelf || p.session === 0) return null;
+    if (/\\windowsapps\\/i.test(m.path) || ['explorer.exe', 'svchost.exe', 'dwm.exe', 'csrss.exe'].includes(p.exe)) return null;
+    const cmd = m.cmd.trim();
+    let rest;
+    if (cmd.startsWith('"')) {
+      const end = cmd.indexOf('"', 1);
+      rest = end > 0 ? cmd.slice(end + 1) : '';
+    } else if (cmd.toLowerCase().startsWith(m.path.toLowerCase())) {
+      rest = cmd.slice(m.path.length);
+    } else {
+      rest = cmd.replace(/^\S+/, '');
+    }
+    return { path: m.path, args: rest.trim(), name: p.display };
+  }
+
   /** Windows Explorer processes in this sign-in session (the taskbar, desktop and folders). */
   explorers() {
     const self = this.current.get(process.pid);

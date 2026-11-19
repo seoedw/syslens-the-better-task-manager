@@ -1,5 +1,6 @@
 'use strict';
-// Draws the SysLens logo (gradient tile + three bars) into assets/icon.png and assets/icon.ico.
+// Draws the SysLens logo (a flat Windows-blue tile with three bars, the same mark as in the
+// app's sidebar) into assets/icon.png and assets/icon.ico.
 // No dependencies: a 4x4 supersampled rasterizer plus the app's own PNG encoder.
 
 const fs = require('fs');
@@ -8,7 +9,9 @@ const { encodePng } = require('../src/main/png');
 
 const SIZE = 256;
 const SS = 4;
-const S = SIZE / 32; // logo is designed on a 32x32 grid
+const S = SIZE / 32; // drawn on a 32x32 grid
+const TILE = [0x00, 0x67, 0xc0]; // Windows 11's default accent blue
+const BAR = [0xff, 0xff, 0xff];
 
 function inRoundRect(px, py, x, y, w, h, r) {
   if (px < x || px > x + w || py < y || py > y + h) return false;
@@ -17,17 +20,16 @@ function inRoundRect(px, py, x, y, w, h, r) {
   return (px - cx) ** 2 + (py - cy) ** 2 <= r * r;
 }
 
-const tile = [2 * S, 2 * S, 28 * S, 28 * S, 8 * S];
+// The sidebar mark is drawn on a 20x20 grid; here it fills 30 of 32 units.
+const k = 1.5;
+const tile = [1 * S, 1 * S, 30 * S, 30 * S, 6.75 * S];
 const bars = [
-  [8, 17, 3.2, 7],
-  [14.4, 11, 3.2, 13],
-  [20.8, 14, 3.2, 10],
-].map(([x, y, w, h]) => [x * S, y * S, w * S, h * S, 1.2 * S]);
+  [4.6, 10, 2.6, 5.6],
+  [8.7, 4.6, 2.6, 11],
+  [12.8, 7.6, 2.6, 8],
+].map(([x, y, w, h]) => [(1 + x * k) * S, (1 + y * k) * S, w * k * S, h * k * S, 1.5 * S]);
 
-const from = [0x6a, 0xa8, 0xff];
-const to = [0x9b, 0x7b, 0xff];
 const rgba = Buffer.alloc(SIZE * SIZE * 4);
-
 for (let y = 0; y < SIZE; y++) {
   for (let x = 0; x < SIZE; x++) {
     let tileCov = 0;
@@ -42,14 +44,10 @@ for (let y = 0; y < SIZE; y++) {
         }
       }
     }
-    const n = SS * SS;
-    const a = tileCov / n;
-    const b = (barCov / n) * 0.95;
-    const t = (x + y) / (2 * SIZE);
-    const base = from.map((c, i) => c + (to[i] - c) * t);
-    const mix = (b / Math.max(a, 1e-9)) || 0;
+    const a = tileCov / (SS * SS);
+    const mix = tileCov ? barCov / tileCov : 0;
     const o = (y * SIZE + x) * 4;
-    for (let i = 0; i < 3; i++) rgba[o + i] = Math.round(base[i] * (1 - mix) + 255 * mix);
+    for (let i = 0; i < 3; i++) rgba[o + i] = Math.round(TILE[i] * (1 - mix) + BAR[i] * mix);
     rgba[o + 3] = Math.round(a * 255);
   }
 }

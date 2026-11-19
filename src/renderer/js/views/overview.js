@@ -29,6 +29,8 @@ const Overview = (() => {
           <div class="subline" id="ov-ram-sub"></div>
           <div id="ov-ram-stack"></div>
           <div id="ov-ram-legend"></div>
+          <div class="chart-caption" style="margin-top:18px"><span>In use (solid) and compressed (shaded), last 2 minutes</span><span id="ov-ram-max"></span></div>
+          <div class="chart-frame"><canvas class="mid-chart" id="ov-ram-chart"></canvas></div>
         </div>
         <div class="card">
           <div class="card-title">Findings <span class="sub">checked every second</span></div>
@@ -179,6 +181,14 @@ const Overview = (() => {
     const segs = U.memSegments(mem);
     set('ov-ram-stack', U.stack(segs, mem.installed, true));
     set('ov-ram-legend', U.legend(segs.filter((x) => x.bytes > 0)));
+    Charts.line(U.$('#ov-ram-chart'), {
+      max: mem.total,
+      series: [
+        { data: h['mem.inUse'], color: '--c-mem' },
+        { data: h['mem.compression'], color: '--m-compression', fillAlpha: 0.22, width: 1 },
+      ],
+    });
+    set('ov-ram-max', U.bytes(mem.total));
 
     // Insights
     set(

@@ -233,7 +233,8 @@ const NetworkView = (() => {
       ? `<table class="list-table"><tbody>${list
           .map((l) => {
             const app = appOf(l, map);
-            return `<tr class="hov"><td style="width:70px" class="mono">${l.port}</td><td><div class="appcell" data-pid="${l.pid}" style="cursor:pointer">${U.icon(app.path, app.isWindows ? U.WIN_ICON : undefined)}<span class="ellipsis">${U.esc(app.name)}</span></div></td><td class="faint ellipsis" style="width:38%">${U.esc([l.service, l.scopes.join(', ')].filter(Boolean).join(' · '))}</td></tr>`;
+            const where = l.scopes.map((x) => (/^(All networks|This PC only)$/.test(x) ? U.esc(x) : U.pii(x))).join(', ');
+            return `<tr class="hov"><td style="width:70px" class="mono">${l.port}</td><td><div class="appcell" data-pid="${l.pid}" style="cursor:pointer">${U.icon(app.path, app.isWindows ? U.WIN_ICON : undefined)}<span class="ellipsis">${U.esc(app.name)}</span></div></td><td class="faint ellipsis" style="width:38%">${[l.service && U.esc(l.service), where].filter(Boolean).join(' · ')}</td></tr>`;
           })
           .join('')}</tbody></table>`
       : '<div class="empty">Nothing is listening.</div>';

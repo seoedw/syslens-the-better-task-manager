@@ -1,9 +1,14 @@
 {
   "name": "syslens",
   "productName": "SysLens",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
-  "description": "A better Task Manager for Windows: every process, exactly where your RAM goes, and what fills your disk.",
+  "description": "SysLens, the better Task Manager for Windows: every process, where your RAM really goes, what fills your disk, what starts with Windows and what your PC did while you were away.",
+  "homepage": "https://github.com/seoedw/syslens-the-better-task-manager#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/seoedw/syslens-the-better-task-manager.git"
+  },
   "main": "src/main/launcher.js",
   "scripts": {
     "start": "node --jitless src/main/launcher.js",

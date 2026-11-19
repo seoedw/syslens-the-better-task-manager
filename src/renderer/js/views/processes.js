@@ -496,7 +496,11 @@ const Processes = (() => {
     return procs
       .slice(0, 60)
       .map(
-        (p) => `<div class="member" data-pick="${p.pid}"><span class="faint tabular">${p.pid}</span><span class="role">${U.esc(p.role || (p.windows && p.windows[0]) || p.display)}</span><span class="r">${U.bytes(p.priv)}</span></div>`,
+        (p) => {
+          // A window title can name a document or web page: "Hide personal info" blurs it.
+          const title = !p.role && p.windows && p.windows[0];
+          return `<div class="member" data-pick="${p.pid}"><span class="faint tabular">${p.pid}</span><span class="role${title ? ' pii' : ''}">${U.esc(p.role || title || p.display)}</span><span class="r">${U.bytes(p.priv)}</span></div>`;
+        },
       )
       .join('');
   }

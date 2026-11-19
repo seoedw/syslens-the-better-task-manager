@@ -41,6 +41,11 @@ const COUNTERS = {
   'gpu.procDedicated': '\\GPU Process Memory(*)\\Dedicated Usage',
   'gpu.adapterShared': '\\GPU Adapter Memory(*)\\Shared Usage',
   'gpu.adapterDedicated': '\\GPU Adapter Memory(*)\\Dedicated Usage',
+  // Power draw in milliwatts (CPU, GPU, NPU, package, per core, whole system) on PCs whose
+  // firmware exposes energy meters, and the ACPI thermal zones. Missing on many desktops.
+  'power.meter': '\\Energy Meter(*)\\Power',
+  'temp.zone': '\\Thermal Zone Information(*)\\Temperature',
+  'temp.limit': '\\Thermal Zone Information(*)\\% Passive Limit',
 };
 
 const RE_ENGINE = /^pid_(\d+)_luid_(0x[0-9a-f]+)_(0x[0-9a-f]+)_phys_(\d+)_eng_(\d+)_engtype_(.*)$/i;
@@ -276,6 +281,44 @@ class Monitor extends EventEmitter {
     return out.sort((a, b) => b.recv + b.sent - (a.recv + a.sent) || a.name.localeCompare(b.name));
   }
 
+  powerSample() {
+    const arr = this.pdh.array('power.meter');
+    if (!arr.length) return null;
+    const by = {};
+    const cores = [];
+    for (const { name, value } of arr) {
+      const watts = value / 1000;
+      const m = /_Core(\d+)_CORE$/i.exec(name);
+      if (m) cores.push({ core: Number(m[1]), w: watts });
+      else if (name !== '_Total') by[name.toLowerCase()] = watts;
+    }
+    cores.sort((a, b) => a.core - b.core);
+    const pick = (...keys) => {
+      for (const k of keys) if (by[k] != null) return by[k];
+      return null;
+    };
+    // "System Power" is one SoC rail (it sits flat whatever the load), not the whole PC,
+    // so the headline number is the processor package (CPU + GPU + NPU).
+    return {
+      system: null,
+      socket: pick('socket power', 'apu power', 'rapl_package0_pkg'),
+      cpu: pick('cpu power', 'rapl_package0_pp0'),
+      gpu: pick('gpu power', 'rapl_package0_pp1'),
+      npu: pick('npu power'),
+      dram: pick('rapl_package0_dram'),
+      package: pick('rapl_package0_pkg'),
+      cores,
+    };
+  }
+
+  tempSample() {
+    const limits = new Map(this.pdh.array('temp.limit').map((x) => [x.name, x.value]));
+    return this.pdh
+      .array('temp.zone')
+      .filter((t) => t.value > 200 && t.value < 400)
+      .map((t) => ({ name: t.name.replace(/^\\_TZ\./i, ''), c: t.value - 273.15, limit: limits.has(t.name) ? limits.get(t.name) : null }));
+  }
+
   memorySample(procs, gpu) {
     const ms = w.memoryStatus();
     const v = (k) => this.pdh.value(k) || 0;
@@ -338,6 +381,9 @@ class Monitor extends EventEmitter {
     const mem = this.memorySample(list, gpu);
     const disks = this.diskSample();
     const nets = this.netSample();
+    const power = this.powerSample();
+    const temps = this.tempSample();
+    const battery = w.powerStatus();
     const uptime = Number(w.api.GetTickCount64());
 
     const h = {
@@ -366,6 +412,11 @@ class Monitor extends EventEmitter {
       h[`gpu:${g.key}.dedicated`] = g.dedicated;
       for (const [type, v] of Object.entries(g.types)) h[`gpu:${g.key}.eng.${type}`] = v;
     }
+    if (power) {
+      for (const k of ['system', 'socket', 'cpu', 'gpu', 'npu']) if (power[k] != null) h[`power.${k}`] = power[k];
+    }
+    if (temps.length) h.temp = temps[0].c;
+    if (battery && battery.percent != null) h.battery = battery.percent;
     this.history.push(h);
 
     const snapshot = {
@@ -380,6 +431,9 @@ class Monitor extends EventEmitter {
       disks,
       nets,
       gpus: gpu.adapters,
+      power,
+      temps,
+      battery,
       totals,
       procs: list,
       groups,

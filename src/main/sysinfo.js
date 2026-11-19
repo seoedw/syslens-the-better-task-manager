@@ -8,6 +8,9 @@ const { runPowerShellJson } = require('./powershell');
 const SCRIPT_CORE = `
 $os = Get-CimInstance Win32_OperatingSystem
 $cs = Get-CimInstance Win32_ComputerSystem
+$csp = Get-CimInstance Win32_ComputerSystemProduct
+$accent = ''
+try { $accent = -join ((Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Accent' -ErrorAction Stop).AccentPalette | ForEach-Object { '{0:X2}' -f $_ }) } catch {}
 $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
 $ram = @(Get-CimInstance Win32_PhysicalMemory)
 $cur = Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion'
@@ -20,7 +23,8 @@ $gpus = @(Get-ChildItem 'HKLM:\\SOFTWARE\\Microsoft\\DirectX' | ForEach-Object {
   build = "$($cur.CurrentBuild).$($cur.UBR)"
   displayVersion = [string]$cur.DisplayVersion
   manufacturer = [string]$cs.Manufacturer
-  model = [string]$cs.Model
+  model = if ($csp.Version -and $csp.Version -notmatch '^(none|default string|to be filled|system version)') { [string]$csp.Version } else { [string]$cs.Model }
+  accent = $accent
   cpu = ([string]$cpu.Name).Trim()
   cores = [int]$cpu.NumberOfCores
   logical = [int]$cpu.NumberOfLogicalProcessors
@@ -72,7 +76,7 @@ async function loadSystemInfo(onUpdate = () => {}) {
   const info = baseInfo();
   const core = runPowerShellJson(SCRIPT_CORE, 45000).then((raw) => {
     if (!raw) return;
-    for (const k of ['os', 'build', 'displayVersion', 'manufacturer', 'model', 'cpu', 'cores', 'logical', 'maxMHz', 'ramSpeed', 'ramModules']) {
+    for (const k of ['os', 'build', 'displayVersion', 'manufacturer', 'model', 'accent', 'cpu', 'cores', 'logical', 'maxMHz', 'ramSpeed', 'ramModules']) {
       if (raw[k]) info[k] = raw[k];
     }
     for (const g of raw.gpus || []) {

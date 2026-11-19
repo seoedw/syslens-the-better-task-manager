@@ -140,10 +140,15 @@ function formatInstallDate(d) {
   return /^\d{8}$/.test(d || '') ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}` : null;
 }
 
+// Worker threads are freed when unused. A finished scan's folder tree can take 100+ MB, so
+// its results are let go after 15 minutes without anyone looking at them.
+const IDLE_MS = { measure: 60 * 1000, scan: 15 * 60 * 1000 };
+
 class StorageService extends EventEmitter {
   constructor() {
     super();
     this.workers = {};
+    this.idle = {};
     this.pending = new Map();
     this.req = 0;
     this.jobId = 0;
@@ -153,12 +158,18 @@ class StorageService extends EventEmitter {
   }
 
   worker(kind) {
+    this.touch(kind);
     if (this.workers[kind]) return this.workers[kind];
-    const wk = new Worker(path.join(__dirname, 'worker.js'));
+    const wk = new Worker(path.join(__dirname, 'worker.js'), { resourceLimits: { maxYoungGenerationSizeMb: 8 } });
     wk.on('message', (msg) => this.onMessage(kind, msg));
     wk.on('error', (err) => this.emit('error', err));
     wk.on('exit', () => {
-      delete this.workers[kind];
+      if (this.workers[kind] === wk) delete this.workers[kind];
+      for (const [req, p] of this.pending) {
+        if (p.kind !== kind) continue;
+        this.pending.delete(req);
+        p.reject(new Error('Storage worker stopped'));
+      }
       if (kind === 'scan' && this.scanState.running) {
         this.scanState.running = false;
         this.emit('done', { id: this.scanState.id, error: 'Scanner stopped unexpectedly' });
@@ -168,10 +179,37 @@ class StorageService extends EventEmitter {
     return wk;
   }
 
+  touch(kind) {
+    clearTimeout(this.idle[kind]);
+    this.idle[kind] = setTimeout(() => this.release(kind), IDLE_MS[kind] || 60000);
+    this.idle[kind].unref();
+  }
+
+  busy(kind) {
+    if (kind === 'scan' && this.scanState.running) return true;
+    if (kind === 'measure' && this.measureJobs && this.measureJobs.size) return true;
+    for (const p of this.pending.values()) if (p.kind === kind) return true;
+    return false;
+  }
+
+  release(kind) {
+    const wk = this.workers[kind];
+    if (!wk) return;
+    if (this.busy(kind)) {
+      this.touch(kind);
+      return;
+    }
+    delete this.workers[kind];
+    wk.terminate();
+    if (kind === 'scan' && this.scanState.summary) {
+      this.scanState = { running: false, id: this.scanState.id, root: null, summary: null, expired: { root: this.scanState.summary.root, at: Date.now() } };
+    }
+  }
+
   request(kind, msg) {
     const req = ++this.req;
     return new Promise((resolve, reject) => {
-      this.pending.set(req, { resolve, reject });
+      this.pending.set(req, { resolve, reject, kind });
       this.worker(kind).postMessage({ ...msg, req });
     });
   }
@@ -389,9 +427,10 @@ class StorageService extends EventEmitter {
   }
 
   dispose() {
+    for (const t of Object.values(this.idle)) clearTimeout(t);
     for (const wk of Object.values(this.workers)) wk.terminate();
     this.workers = {};
   }
 }
 
-module.exports = { StorageService };
+module.exports = { StorageService, friendlyStoreName };

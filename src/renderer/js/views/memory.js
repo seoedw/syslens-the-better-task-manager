@@ -111,7 +111,7 @@ const MemoryView = (() => {
         <td class="sz">${U.bytes(x.bytes)}</td>
         <td class="pc"><div class="p">${(share * 100).toFixed(1)}%</div>${U.minibar(share / 0.5, `var(${x.color})`)}</td></tr>`;
     };
-    const head = (label, bytes) => `<tr><td colspan="4" style="padding:14px 10px 4px;font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:var(--text-3);font-weight:600;border-top:0">${label} · ${U.bytes(bytes)}</td></tr>`;
+    const head = (label, bytes) => `<tr class="grp"><td colspan="4">${label} · ${U.bytes(bytes)}</td></tr>`;
     const table = [
       head('In use', mem.inUse),
       ...used.sort((a, b) => b.bytes - a.bytes).map((x) => row(x)),

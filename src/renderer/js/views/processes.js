@@ -9,6 +9,10 @@ const Processes = (() => {
   let order = [];
   let drawerRenderedAt = 0;
   let drawerSelKey = null;
+  // Recent CPU/memory of whatever is selected, for the sparklines in the details panel.
+  const trail = { key: null, cpu: [], priv: [] };
+  // Network connections of the selected process, refreshed every few seconds.
+  const net = { pid: null, list: null, at: 0, loading: false };
 
   const st = {
     mode: 'grouped',
@@ -390,15 +394,101 @@ const Processes = (() => {
   }
 
   function aboutBlock(d) {
+    if (st.sel && st.sel.kind === 'group' && st.sel.key === 'syslens') {
+      return '<section><h4>What is this?</h4><div class="about">SysLens itself: its window (a lean Microsoft Edge app window), the server that reads the system, and the small launcher that restarts the server if it ever stops.</div></section>';
+    }
     if (!d || !d.about) return '';
     return `<section><h4>What is this?</h4><div class="about">${U.esc(d.about)}</div></section>`;
+  }
+
+  function trackSelected() {
+    if (!st.sel) {
+      trail.key = null;
+      return;
+    }
+    const item = st.sel.kind === 'group' ? groupByKey.get(st.sel.key) : procByPid.get(st.sel.pid);
+    if (!item) return;
+    const k = selKey();
+    if (trail.key !== k) {
+      trail.key = k;
+      trail.cpu = [];
+      trail.priv = [];
+    }
+    trail.cpu.push(item.cpu);
+    trail.priv.push(item.priv);
+    if (trail.cpu.length > 90) {
+      trail.cpu.shift();
+      trail.priv.shift();
+    }
+  }
+
+  function sparksBlock() {
+    return `<section><div class="sparks">
+      <div class="sp"><div class="k">CPU <b id="pr-sp-cpu-v"></b></div><canvas id="pr-sp-cpu"></canvas></div>
+      <div class="sp"><div class="k">Memory <b id="pr-sp-mem-v"></b></div><canvas id="pr-sp-mem"></canvas></div>
+    </div></section>`;
+  }
+
+  function drawSparks() {
+    const c = U.$('#pr-sp-cpu');
+    if (!c || !trail.cpu.length) return;
+    const pad = (arr) => (arr.length >= 2 ? arr : [arr[0], arr[0]]);
+    Charts.line(c, { series: [{ data: pad(trail.cpu), color: '--c-cpu', width: 1.2 }], max: Math.max(10, ...trail.cpu) * 1.1, grid: false });
+    Charts.line(U.$('#pr-sp-mem'), { series: [{ data: pad(trail.priv), color: '--c-mem', width: 1.2 }], max: Math.max(...trail.priv) * 1.15 || 1, grid: false });
+    U.$('#pr-sp-cpu-v').textContent = `${trail.cpu[trail.cpu.length - 1].toFixed(1)}%`;
+    U.$('#pr-sp-mem-v').textContent = U.bytes(trail.priv[trail.priv.length - 1]);
+  }
+
+  async function loadConnections(pid) {
+    if (net.loading) return;
+    net.loading = true;
+    try {
+      const list = await syslens.connections({ pid });
+      if (st.sel && st.sel.kind === 'proc' && st.sel.pid === pid) {
+        net.pid = pid;
+        net.list = list;
+        net.at = Date.now();
+        renderDrawer(true);
+      }
+    } catch {
+      /* not essential */
+    }
+    net.loading = false;
+  }
+
+  function connectionsBlock(pid) {
+    if (net.pid !== pid || Date.now() - net.at > 5000) loadConnections(pid);
+    if (net.pid !== pid || !net.list) return '';
+    const list = net.list;
+    if (!list.length) return '<section><h4>Network</h4><div class="faint">No open connections.</div></section>';
+    const est = list.filter((c) => c.state === 'Established');
+    const lis = list.filter((c) => c.state === 'Listening');
+    const rows = [...est, ...lis]
+      .slice(0, 8)
+      .map(
+        (c) => `<div class="conn-row"><span class="who" title="${U.esc(c.host || c.remote)}">${c.state === 'Listening' ? `Listening on port ${c.lport}` : U.esc(c.host || c.remote)}</span><span class="faint">${c.state === 'Listening' ? '' : `${c.rport}${c.service ? ` ${U.esc(c.service)}` : ''}`}</span></div>`,
+      )
+      .join('');
+    return `<section><h4>Network <span class="faint">· ${est.length} connected${lis.length ? `, ${lis.length} listening` : ''}${list.length - est.length - lis.length > 0 ? `, ${list.length - est.length - lis.length} other` : ''}</span></h4>${rows}${
+      est.length + lis.length > 8 ? '<div style="margin-top:4px"><button class="link" data-go="network">All connections</button></div>' : ''
+    }</section>`;
+  }
+
+  function servicesBlock(pid) {
+    const sv = typeof ServicesView !== 'undefined' && ServicesView.data;
+    if (!sv) return '';
+    const mine = sv.list.filter((x) => x.pid === pid);
+    if (!mine.length) return '';
+    return `<section><h4>Services in this process</h4>${mine
+      .map((x) => `<div class="conn-row"><span class="who">${U.esc(x.display)}</span><span class="faint">${U.esc(x.name)}</span></div>`)
+      .join('')}</section>`;
   }
 
   function windowsBlock(titles) {
     if (!titles || !titles.length) return '';
     return `<section><h4>Open windows</h4>${titles
       .slice(0, 8)
-      .map((t) => `<div class="faint" style="margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" data-tip="${U.esc(t)}">${U.esc(t)}</div>`)
+      .map((t) => `<div class="faint pii" style="margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" data-tip="${U.esc(t)}">${U.esc(t)}</div>`)
       .join('')}</section>`;
   }
 
@@ -442,6 +532,7 @@ const Processes = (() => {
         <div class="drawer-actions"><button class="btn danger sm" data-end ${g.critical ? 'disabled' : ''}>End task (${g.count} processes)</button>${
           g.path ? `<button class="btn sm" data-loc="${U.esc(g.path)}">Open file location</button>` : ''
         }</div>
+        ${sparksBlock()}
         ${aboutBlock(d)}
         <section><h4>Resources</h4>${kv([
           ['Memory (private)', U.bytes(g.priv)],
@@ -474,6 +565,7 @@ const Processes = (() => {
           p.path && !p.pathGuessed ? `<button class="btn sm" data-loc="${U.esc(p.path)}">Open file location</button>` : ''
         }</div>
         ${p.critical ? '<div class="notice warn"><svg viewBox="0 0 24 24"><path d="M1 21h22L12 2zm12-3h-2v-2h2zm0-4h-2v-4h2z"/></svg><div>Critical Windows process — ending it would crash Windows, so SysLens won’t.</div></div>' : ''}
+        ${sparksBlock()}
         ${d && d.pid === p.pid ? aboutBlock(d) : ''}
         <section><h4>Resources</h4>${kv([
           ['Memory (private)', U.bytes(p.priv)],
@@ -493,9 +585,14 @@ const Processes = (() => {
           ['Started', p.created ? `${U.date(p.created)} <span class="faint">(${U.ago(p.created)})</span>` : 'At boot'],
           ['Priority', U.esc(p.priority || '—')],
           ['Session', p.session === 0 ? '0 (services)' : String(p.session)],
+          d && d.pid === p.pid && d.user && ['User', U.esc(d.user)],
+          d && d.pid === p.pid && d.integrity && ['Integrity', `${U.esc(d.integrity)}${d.elevated ? ' <span class="faint">· running as administrator</span>' : ''}`],
+          d && d.pid === p.pid && d.arch && ['Architecture', U.esc(d.arch)],
           parents.length && ['Started by', parents.map((x) => `<button class="link" data-pick="${x.pid}">${U.esc(x.display)}</button>`).join(' ← ')],
           d && d.version && ['Version', U.esc(d.version)],
         ])}</section>
+        ${servicesBlock(p.pid)}
+        ${connectionsBlock(p.pid)}
         ${p.path ? `<section><h4>Path${p.pathGuessed ? ' <span class="faint" style="text-transform:none;letter-spacing:0">(from System32; exact path needs admin)</span>' : ''}</h4><div class="codebox">${U.esc(p.path)}</div></section>` : ''}
         ${
           d && d.pid === p.pid
@@ -506,6 +603,7 @@ const Processes = (() => {
         ${kids.length ? `<section><h4>Child processes</h4>${memberList(kids.sort((a, b) => b.priv - a.priv))}</section>` : ''}`;
     }
     drawer.innerHTML = html;
+    drawSparks();
   }
 
   async function endSelected() {
@@ -591,10 +689,12 @@ const Processes = (() => {
   function render(s) {
     snap = s;
     reindex();
+    trackSelected();
     U.$$('#pr-mode button').forEach((b) => b.classList.toggle('on', b.dataset.mode === st.mode));
     renderFilters();
     renderTable();
     renderDrawer();
+    drawSparks();
   }
 
   function show(opts = {}) {

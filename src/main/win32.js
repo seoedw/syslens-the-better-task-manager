@@ -11,6 +11,8 @@ const version = koffi.load('version.dll');
 const shell32 = koffi.load('shell32.dll');
 const user32 = koffi.load('user32.dll');
 const dwmapi = koffi.load('dwmapi.dll');
+const advapi32 = koffi.load('advapi32.dll');
+const iphlpapi = koffi.load('iphlpapi.dll');
 
 koffi.proto('int __stdcall WNDENUMPROC(intptr_t hwnd, intptr_t lparam)');
 
@@ -26,6 +28,17 @@ const api = {
   TerminateProcess: kernel32.func('int __stdcall TerminateProcess(intptr_t h, uint32 code)'),
   GetPriorityClass: kernel32.func('uint32 __stdcall GetPriorityClass(intptr_t h)'),
   GetLastError: kernel32.func('uint32 __stdcall GetLastError()'),
+  IsWow64Process2: kernel32.func('int __stdcall IsWow64Process2(intptr_t h, _Out_ uint16 *processMachine, _Out_ uint16 *nativeMachine)'),
+  GetSystemPowerStatus: kernel32.func('int __stdcall GetSystemPowerStatus(void *status)'),
+
+  // advapi32: process tokens
+  OpenProcessToken: advapi32.func('int __stdcall OpenProcessToken(intptr_t h, uint32 access, _Out_ intptr_t *token)'),
+  GetTokenInformation: advapi32.func('int __stdcall GetTokenInformation(intptr_t token, int cls, void *buf, uint32 len, _Out_ uint32 *ret)'),
+  LookupAccountSidW: advapi32.func('int __stdcall LookupAccountSidW(const char16_t *system, intptr_t sid, void *name, _Inout_ uint32 *nameLen, void *domain, _Inout_ uint32 *domainLen, _Out_ int *use)'),
+
+  // iphlpapi: TCP/UDP endpoints with their owning process
+  GetExtendedTcpTable: iphlpapi.func('uint32 __stdcall GetExtendedTcpTable(void *table, _Inout_ uint32 *size, int order, uint32 af, int cls, uint32 reserved)'),
+  GetExtendedUdpTable: iphlpapi.func('uint32 __stdcall GetExtendedUdpTable(void *table, _Inout_ uint32 *size, int order, uint32 af, int cls, uint32 reserved)'),
 
   // kernel32: memory / system
   GlobalMemoryStatusEx: kernel32.func('int __stdcall GlobalMemoryStatusEx(void *buf)'),
@@ -269,6 +282,116 @@ function isAdmin() {
   }
 }
 
+// ---------- process tokens ----------
+const TOKEN_QUERY = 0x0008;
+const INTEGRITY = { 0x0000: 'Untrusted', 0x1000: 'Low', 0x2000: 'Medium', 0x2100: 'Medium (plus)', 0x3000: 'High', 0x4000: 'System', 0x5000: 'Protected process' };
+const sidNames = new Map();
+
+function lookupSid(sidPtr, sidKey) {
+  if (sidNames.has(sidKey)) return sidNames.get(sidKey);
+  const name = Buffer.alloc(512);
+  const dom = Buffer.alloc(512);
+  const nl = [256];
+  const dl = [256];
+  const use = [0];
+  let out = null;
+  if (api.LookupAccountSidW(null, sidPtr, name, nl, dom, dl, use)) {
+    const n = name.toString('utf16le', 0, nl[0] * 2);
+    const d = dom.toString('utf16le', 0, dl[0] * 2);
+    out = d ? `${d}\\${n}` : n;
+  }
+  sidNames.set(sidKey, out);
+  return out;
+}
+
+/** User account, integrity level and elevation of a process (null when it can't be opened). */
+function processToken(pid) {
+  const h = openProcess(pid);
+  if (!h) return null;
+  const tok = [0];
+  try {
+    if (!api.OpenProcessToken(h, TOKEN_QUERY, tok)) return null;
+    const t = tok[0];
+    const out = { user: null, integrity: null, elevated: null };
+    try {
+      const buf = Buffer.alloc(512);
+      const ret = [0];
+      const base = addressOf(buf);
+      if (api.GetTokenInformation(t, 1 /* TokenUser */, buf, buf.length, ret)) {
+        const sidPtr = buf.readBigUInt64LE(0);
+        const off = ptrOffset(sidPtr, base, buf);
+        const key = off >= 0 ? buf.toString('hex', off, off + 8 + 4 * buf[off + 1]) : String(sidPtr);
+        out.user = lookupSid(sidPtr, key);
+      }
+      if (api.GetTokenInformation(t, 20 /* TokenElevation */, buf, 4, ret)) out.elevated = buf.readUInt32LE(0) !== 0;
+      if (api.GetTokenInformation(t, 25 /* TokenIntegrityLevel */, buf, buf.length, ret)) {
+        const off = ptrOffset(buf.readBigUInt64LE(0), base, buf);
+        if (off >= 0) {
+          const n = buf[off + 1];
+          const rid = n > 0 ? buf.readUInt32LE(off + 8 + 4 * (n - 1)) : 0;
+          out.integrity = INTEGRITY[rid] || `0x${rid.toString(16)}`;
+        }
+      }
+    } finally {
+      api.CloseHandle(t);
+    }
+    return out;
+  } catch {
+    return null;
+  } finally {
+    api.CloseHandle(h);
+  }
+}
+
+const MACHINES = { 0x014c: 'x86 (32-bit)', 0x8664: 'x64 (64-bit)', 0xaa64: 'ARM64', 0x01c4: 'ARM' };
+function processArch(pid) {
+  const h = openProcess(pid);
+  if (!h) return null;
+  try {
+    const pm = [0];
+    const nm = [0];
+    if (!api.IsWow64Process2(h, pm, nm)) return null;
+    return MACHINES[pm[0] || nm[0]] || null;
+  } catch {
+    return null;
+  } finally {
+    api.CloseHandle(h);
+  }
+}
+
+/** Battery and power source, from GetSystemPowerStatus (cheap enough to call every sample). */
+function powerStatus() {
+  const b = Buffer.alloc(12);
+  if (!api.GetSystemPowerStatus(b)) return null;
+  const flag = b[1];
+  const pct = b[2];
+  const life = b.readUInt32LE(4);
+  const hasBattery = flag !== 128 && !(flag === 255 && pct === 255);
+  return {
+    ac: b[0] === 1,
+    hasBattery,
+    charging: hasBattery && (flag & 8) !== 0,
+    percent: hasBattery && pct !== 255 ? pct : null,
+    secondsLeft: hasBattery && life !== 0xffffffff ? life : null,
+    saver: b[3] === 1,
+  };
+}
+
+/** Raw GetExtendedTcpTable / GetExtendedUdpTable buffer, or null. */
+function endpointTable(kind, family) {
+  const fn = kind === 'tcp' ? api.GetExtendedTcpTable : api.GetExtendedUdpTable;
+  const cls = kind === 'tcp' ? 5 /* TCP_TABLE_OWNER_PID_ALL */ : 1; /* UDP_TABLE_OWNER_PID */
+  let size = [256 * 1024];
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const buf = Buffer.alloc(size[0]);
+    const rc = fn(buf, size, 0, family, cls, 0);
+    if (rc === 0) return buf;
+    if (rc !== 122 /* ERROR_INSUFFICIENT_BUFFER */) return null;
+    size = [size[0] + 64 * 1024];
+  }
+  return null;
+}
+
 const ERRORS = { 5: 'Access denied', 87: 'Process no longer exists', 6: 'Invalid handle' };
 function errorText(code) {
   return ERRORS[code] || `Windows error ${code}`;
@@ -291,6 +414,10 @@ module.exports = {
   recycleBin,
   visibleWindows,
   isAdmin,
+  processToken,
+  processArch,
+  powerStatus,
+  endpointTable,
   errorText,
   STATUS_INFO_LENGTH_MISMATCH,
   PROCESS_TERMINATE,

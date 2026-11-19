@@ -15,7 +15,8 @@ if ($Desktop) { $folders += [Environment]::GetFolderPath('Desktop') }
 foreach ($folder in $folders) {
   $link = $shell.CreateShortcut((Join-Path $folder 'SysLens.lnk'))
   $link.TargetPath = $conhost
-  $link.Arguments = "--headless `"$node`" `"$launcher`""
+  # --jitless keeps the launcher (which only waits on timers) at a few MB.
+  $link.Arguments = "--headless `"$node`" --jitless `"$launcher`""
   $link.WorkingDirectory = $root
   $link.IconLocation = "$root\assets\icon.ico,0"
   $link.Description = 'SysLens - see everything your PC is doing'

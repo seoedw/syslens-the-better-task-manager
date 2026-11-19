@@ -139,6 +139,7 @@ const Storage = (() => {
   }
 
   async function startScan(rootPath) {
+    st.expired = null;
     st.scanning = true;
     st.scanRoot = rootPath;
     st.started = Date.now();
@@ -159,12 +160,18 @@ const Storage = (() => {
   }
 
   async function cd(p) {
-    const listing = await syslens.storage.children(p);
+    const listing = await syslens.storage.children(p).catch(() => null);
     if (listing) {
       st.listing = listing;
       renderExplore();
       body.scrollTop = 0;
       root.scrollTop = 0;
+    } else if (st.summary) {
+      // The scan results were freed after sitting unused (see StorageService.release).
+      st.expired = { root: st.summary.root };
+      st.summary = null;
+      st.listing = null;
+      renderExplore();
     }
   }
 
@@ -233,6 +240,7 @@ const Storage = (() => {
       <svg viewBox="0 0 24 24" width="42" height="42"><path fill="var(--accent)" d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" opacity=".25"/><path fill="var(--accent)" d="M15.5 10a3.5 3.5 0 0 1 2.9 5.46l2.3 2.3-1.06 1.06-2.3-2.3A3.5 3.5 0 1 1 15.5 10zm0 1.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg>
       <h3>See exactly what is filling your disk</h3>
       <p>SysLens reads every folder (read-only — nothing is changed or deleted) and shows the biggest folders and files as a map you can click into. A whole drive usually takes under a minute.</p>
+      ${st.expired ? `<div class="notice" style="margin:6px 0 0">${INFO}<div>The results of your last scan (${U.esc(st.expired.root)}) were cleared after 15 minutes unused, to give the memory back. Scan again to see them.</div></div>` : ''}
       ${st.error ? `<div class="notice warn" style="margin:6px 0 0">${INFO}<div>${U.esc(st.error)}</div></div>` : ''}
       <div class="row">${drives.map((d) => `<button class="btn primary" data-scan="${U.esc(d.root)}">Scan ${U.esc(d.letter)} ${d.label ? `(${U.esc(d.label)})` : ''}</button>`).join('')}<button class="btn" data-pickscan>Choose a folder…</button></div>
     </div>`;
@@ -507,6 +515,11 @@ const Storage = (() => {
     if (!st.loaded && state.scan && state.scan.summary) {
       st.summary = state.scan.summary;
       await loadScanResults();
+    }
+    if (state.scan && state.scan.expired && !st.scanning) {
+      st.expired = state.scan.expired;
+      st.summary = null;
+      st.listing = null;
     }
     if (!st.loaded && state.scan && state.scan.running) {
       st.scanning = true;

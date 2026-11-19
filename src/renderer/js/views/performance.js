@@ -48,6 +48,11 @@ const Performance = (() => {
     s.gpus.forEach((g, i) => {
       list.push({ id: `gpu:${g.key}`, title: `GPU ${i}`, sub: `${shortGpu(g.name)}  ${g.util.toFixed(0)}%`, data: h[`gpu:${g.key}.util`], max: 100, color: '--c-gpu' });
     });
+    if (s.power) {
+      const total = s.power.system != null ? s.power.system : s.power.socket;
+      const t = s.temps && s.temps[0];
+      list.push({ id: 'power', title: 'Power', sub: `${U.watts(total)}${t ? `  ${t.c.toFixed(0)} °C` : ''}`, data: h[s.power.system != null ? 'power.system' : 'power.socket'], minMax: 10, color: '--c-power' });
+    }
     return list;
   }
 
@@ -257,6 +262,52 @@ const Performance = (() => {
     );
   }
 
+  function buildPower(s) {
+    return `
+      <div class="perf-title"><h2>Power</h2><div class="model">Firmware energy meters${s.temps && s.temps.length ? ' and ACPI thermal zones' : ''}</div></div>
+      ${caption('pf-a', 'Watts: processor package (solid), CPU cores (dashed), GPU (dotted)')}
+      <div class="chart-frame"><canvas class="big-chart" id="pf-a"></canvas></div>
+      <div class="stat-grid" id="pf-stats" style="margin:18px 0 22px"></div>
+      ${s.power.cores.length ? `<div class="card-title">Power per core <span class="sub">${s.power.cores.length} cores</span></div><div class="corebars" id="pf-corebars"></div>` : ''}
+      ${s.temps && s.temps.length ? `<div style="margin-top:22px">${caption('pf-b', 'Temperature, °C')}</div><div class="chart-frame"><canvas class="mid-chart" id="pf-b"></canvas></div>` : ''}`;
+  }
+
+  function updatePower(s) {
+    const p = s.power;
+    const h = s.hist;
+    const max = Charts.line(U.$('#pf-a'), {
+      series: [
+        { data: h[p.system != null ? 'power.system' : 'power.socket'] || [], color: '--c-power' },
+        { data: h['power.cpu'] || [], color: '--c-cpu', fill: false, dash: [5, 3], width: 1.2 },
+        { data: h['power.gpu'] || [], color: '--c-gpu', fill: false, dash: [2, 3], width: 1.2 },
+      ],
+      minMax: 10,
+    });
+    set('pf-a-max', `${max.toFixed(0)} W`);
+    const t = s.temps && s.temps[0];
+    const b = s.battery;
+    set(
+      'pf-stats',
+      [
+        p.system != null && stat('Whole system', U.watts(p.system), 'Everything the firmware meters: processor, memory, display, storage…'),
+        p.socket != null && stat('Processor package', U.watts(p.socket), 'CPU, GPU and NPU together'),
+        p.cpu != null && stat('CPU cores', U.watts(p.cpu)),
+        p.gpu != null && stat('GPU', U.watts(p.gpu)),
+        p.npu != null && stat('NPU', U.watts(p.npu), 'The AI accelerator'),
+        t && stat('Temperature', `${t.c.toFixed(0)} <small>°C</small>`, `ACPI thermal zone ${t.name}`),
+        t && t.limit != null && stat('Throttling', t.limit < 100 ? `${t.limit.toFixed(0)}<small>% of full speed</small>` : 'None', 'The cooling limit the thermal zone currently applies'),
+        b && b.hasBattery && b.percent != null && stat('Battery', `${b.percent}% <small>${b.charging ? 'charging' : b.ac ? 'plugged in' : 'on battery'}</small>`),
+      ]
+        .filter(Boolean)
+        .join(''),
+    );
+    if (U.$('#pf-corebars')) {
+      const mx = Math.max(2, ...p.cores.map((c) => c.w));
+      set('pf-corebars', p.cores.map((c) => `<div class="corebar"><span class="faint">Core ${c.core}</span>${U.minibar(c.w / mx, 'var(--c-power)')}<span class="v">${U.watts(c.w)}</span></div>`).join(''));
+    }
+    if (U.$('#pf-b')) Charts.line(U.$('#pf-b'), { series: [{ data: h.temp || [], color: '--c-temp' }], max: 100 });
+  }
+
   function render(s) {
     if (!root) return;
     const list = resources(s);
@@ -271,18 +322,24 @@ const Performance = (() => {
       idx = s.gpus.findIndex((g) => `gpu:${g.key}` === current);
       target = s.gpus[idx];
     }
-    if (kind !== 'cpu' && kind !== 'mem' && !target) {
+    if (kind === 'power' && !s.power) {
+      current = 'cpu';
+      return render(s);
+    }
+    if (kind !== 'cpu' && kind !== 'mem' && kind !== 'power' && !target) {
       current = 'cpu';
       return render(s);
     }
     const sig = `${current}|${kind === 'cpu' ? s.cpu.cores.length : ''}`;
     if (builtFor !== sig) {
       builtFor = sig;
-      main.innerHTML = kind === 'cpu' ? buildCpu(s) : kind === 'mem' ? buildMem(s) : kind === 'disk' ? buildDisk(s, target) : kind === 'net' ? buildNet(s, target) : buildGpu(s, target, idx);
+      main.innerHTML =
+        kind === 'cpu' ? buildCpu(s) : kind === 'mem' ? buildMem(s) : kind === 'power' ? buildPower(s) : kind === 'disk' ? buildDisk(s, target) : kind === 'net' ? buildNet(s, target) : buildGpu(s, target, idx);
     }
     for (const el of main.querySelectorAll('[id$="-span"]')) if (el.textContent !== spanText(s)) el.textContent = spanText(s);
     if (kind === 'cpu') updateCpu(s);
     else if (kind === 'mem') updateMem(s);
+    else if (kind === 'power') updatePower(s);
     else if (kind === 'disk') updateDisk(s, target);
     else if (kind === 'net') updateNet(s, target);
     else updateGpu(s, target);

@@ -24,29 +24,33 @@ const Overview = (() => {
       </div>
       <div class="ov-row two">
         <div class="card">
-          <div class="card-title">Where your memory is going<button class="link right" data-go="memory">Full breakdown →</button></div>
+          <div class="card-title">Where your memory is going<button class="link right" data-go="memory">Full breakdown</button></div>
           <div class="headline" id="ov-ram-head"></div>
           <div class="subline" id="ov-ram-sub"></div>
           <div id="ov-ram-stack"></div>
           <div id="ov-ram-legend"></div>
         </div>
         <div class="card">
-          <div class="card-title">What's going on</div>
+          <div class="card-title">Findings <span class="sub">checked every second</span></div>
           <div class="insights" id="ov-insights"></div>
         </div>
       </div>
-      <div class="ov-row halves">
+      <div class="ov-row thirds">
         <div class="card">
-          <div class="card-title">Top memory users <span class="sub">private memory, grouped by app</span><button class="link right" data-go="processes">All processes →</button></div>
+          <div class="card-title">Using the most memory<button class="link right" data-go="processes">All processes</button></div>
           <div class="toplist" id="ov-topmem"></div>
         </div>
         <div class="card">
-          <div class="card-title">Top CPU users <span class="sub">right now</span><button class="link right" data-go="processes" data-sort="cpu">All processes →</button></div>
+          <div class="card-title">Using the most CPU<button class="link right" data-go="processes" data-sort="cpu">All processes</button></div>
           <div class="toplist" id="ov-topcpu"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Recent activity<button class="link right" data-go="history">History</button></div>
+          <div class="events" id="ov-activity"><div class="loading">Reading the event logs…</div></div>
         </div>
       </div>
       <div class="card">
-        <div class="card-title">This PC</div>
+        <div class="card-title">This PC<button class="link right" data-go="system">Everything about it</button></div>
         <div class="sysstrip" id="ov-sys"></div>
       </div>`;
 
@@ -55,7 +59,45 @@ const Overview = (() => {
       if (m) App.go('performance', { res: m.dataset.perf });
       const row = e.target.closest('[data-group]');
       if (row) App.go('processes', { group: row.dataset.group, sort: row.dataset.sortby });
+      if (e.target.closest('[data-history]')) App.go('history');
     });
+  }
+
+  // Recent activity comes from the event logs (cached by the server for a minute).
+  let activity = null;
+  let activityAt = 0;
+  const ACTIVITY = new Set(['boot', 'shutdown', 'unexpected', 'wake', 'sleep', 'crash', 'hang', 'bsod', 'update', 'install', 'service']);
+  const GLYPH = { boot: 'power', shutdown: 'power', unexpected: 'warn', wake: 'wake', sleep: 'sleep', crash: 'crash', hang: 'hang', bsod: 'crash', update: 'update', install: 'install', service: 'service' };
+
+  async function loadActivity() {
+    if (Date.now() - activityAt < 120000) return;
+    activityAt = Date.now();
+    try {
+      const h = await syslens.history(false);
+      activity = h.list.filter((e) => ACTIVITY.has(e.kind)).slice(0, 7);
+    } catch {
+      activity = [];
+    }
+    renderActivity();
+  }
+
+  function renderActivity() {
+    const el = U.$('#ov-activity');
+    if (!el || !activity) return;
+    el.innerHTML = activity.length
+      ? activity
+          .map(
+            (e) => `<div class="event ${e.level || ''}" data-history style="grid-template-columns:18px minmax(0,1fr) auto;cursor:pointer">
+              ${U.glyph(GLYPH[e.kind] || 'page', 'ev-ico')}
+              <div class="what"><div class="t" title="${U.esc(e.title)}">${U.esc(e.title)}</div></div>
+              <span class="count">${U.esc(U.when(e.t))}</span></div>`,
+          )
+          .join('')
+      : '<div class="empty">Nothing notable this week.</div>';
+  }
+
+  function show() {
+    loadActivity();
   }
 
   function set(id, html) {
@@ -145,24 +187,28 @@ const Overview = (() => {
         ? s.insights
             .map(
               (i) => `<div class="insight ${i.level}">${U.LEVEL_ICONS[i.level]}<div><div class="t">${U.esc(i.title)}</div><div class="d">${U.esc(i.text)}</div>${
-                i.link ? `<div class="go"><button class="link" data-go="${i.link}">Show me →</button></div>` : ''
+                i.link ? `<div class="go"><button class="link" data-go="${i.link}">Show</button></div>` : ''
               }</div></div>`,
             )
             .join('')
-        : '<div class="insight info">' + U.LEVEL_ICONS.info + '<div><div class="t">Everything looks normal</div><div class="d">No memory pressure, runaway processes or leaks detected.</div></div></div>',
+        : '<div class="insight info">' + U.LEVEL_ICONS.info + '<div><div class="t">Nothing needs attention</div><div class="d">No memory pressure, runaway processes or leaks right now.</div></div></div>',
     );
+    loadActivity();
 
     // Top lists
     // Memory Compression holds other apps' compressed pages; it's shown in the breakdown instead.
     const apps = s.groups.filter((g) => g.exe !== 'memory compression');
-    set('ov-topmem', topRows(apps.slice(0, 8), (g) => g.priv, (g) => U.bytes(g.priv), 'priv'));
-    const byCpu = [...s.groups].sort((a, b) => b.cpu - a.cpu).slice(0, 8);
+    set('ov-topmem', topRows(apps.slice(0, 7), (g) => g.priv, (g) => U.bytes(g.priv), 'priv'));
+    const byCpu = [...s.groups].sort((a, b) => b.cpu - a.cpu).slice(0, 7);
     set('ov-topcpu', topRows(byCpu, (g) => g.cpu, (g) => `${g.cpu.toFixed(1)}%`, 'cpu'));
 
     // This PC
     const sys = s.sys || {};
     const gpus = s.gpus.map((g) => g.name).join(', ') || '—';
-    const stat = (k, v) => `<div class="stat"><div class="k">${k}</div><div class="v" style="font-size:13px">${v}</div></div>`;
+    const stat = (k, v) => `<div class="stat"><div class="k">${k}</div><div class="v" style="font-size:13px;font-weight:400">${v}</div></div>`;
+    const b = s.battery;
+    const t = s.temps && s.temps[0];
+    const p = s.power;
     set(
       'ov-sys',
       [
@@ -172,11 +218,13 @@ const Overview = (() => {
         stat('Graphics', U.esc(gpus)),
         stat('Windows', U.esc(`${(sys.os || '').replace('Microsoft ', '')}${sys.displayVersion ? ` ${sys.displayVersion}` : ''}`)),
         stat('Up time', U.dur(s.uptime)),
-        stat('Handles', U.num(s.totals.handles)),
-        stat('Device', U.esc([sys.manufacturer, sys.model].filter(Boolean).join(' ') || sys.hostname || '—')),
+        b && b.hasBattery && b.percent != null ? stat('Battery', `${b.percent}% · ${b.charging ? 'charging' : b.ac ? 'plugged in' : b.secondsLeft ? `${U.span(b.secondsLeft * 1000)} left` : 'on battery'}`) : '',
+        p && (p.system != null || p.socket != null) ? stat('Power draw', `${U.watts(p.system != null ? p.system : p.socket)}${p.cpu != null ? ` · CPU ${U.watts(p.cpu)}` : ''}`) : '',
+        t ? stat('Temperature', `${t.c.toFixed(0)} °C${t.limit != null && t.limit < 100 ? ' · throttling' : ''}`) : '',
+        stat('Device', U.esc([sys.manufacturer, sys.model].filter(Boolean).join(' ') || '—')),
       ].join(''),
     );
   }
 
-  return { init, render, title: 'Overview' };
+  return { init, render, show, title: 'Overview' };
 })();

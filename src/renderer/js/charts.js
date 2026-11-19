@@ -95,21 +95,19 @@ const Charts = (() => {
       }
       if (pts.length < 2) continue;
       if (s.fill !== false) {
+        // A flat translucent fill under the line, like Task Manager.
         ctx.beginPath();
         ctx.moveTo(pts[0][0], h);
         for (const [x, y] of pts) ctx.lineTo(x, y);
         ctx.lineTo(pts[pts.length - 1][0], h);
         ctx.closePath();
-        const g = ctx.createLinearGradient(0, 0, 0, h);
-        g.addColorStop(0, alpha(color, s.fillAlpha != null ? s.fillAlpha : 0.3));
-        g.addColorStop(1, alpha(color, 0.03));
-        ctx.fillStyle = g;
+        ctx.fillStyle = alpha(color, s.fillAlpha != null ? s.fillAlpha : 0.14);
         ctx.fill();
       }
       ctx.beginPath();
       pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
       ctx.strokeStyle = color;
-      ctx.lineWidth = s.width || 1.6;
+      ctx.lineWidth = s.width || 1.4;
       ctx.lineJoin = 'round';
       ctx.setLineDash(s.dash || []);
       ctx.stroke();

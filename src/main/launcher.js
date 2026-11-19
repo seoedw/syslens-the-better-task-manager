@@ -3,7 +3,9 @@
 // the launcher starts it again on the same port with the same token, so an open SysLens window
 // reconnects by itself. When the server quits normally (its window was closed), so does this.
 //
-//   node src/main/launcher.js [--debug] [...]   flags are passed on to server.js
+//   node --jitless src/main/launcher.js [--debug] [...]   flags are passed on to server.js
+//
+// --jitless suits the launcher (it only waits on timers): it brings it from ~14 MB to ~3 MB.
 
 const { fork } = require('child_process');
 const path = require('path');
@@ -16,6 +18,9 @@ const MAX_RESTARTS = 5; // within RESTART_WINDOW; past that, something is badly 
 const RESTART_WINDOW = 3 * 60 * 1000;
 const HANG_LIMIT = 60 * 1000; // no heartbeat for this long = the server is stuck
 const CHECK_MS = 5000;
+// The server builds a fresh snapshot every second. A small young generation and V8's
+// size-over-speed mode halve its memory (measured ~95 MB -> ~48 MB) at the same CPU cost.
+const SERVER_FLAGS = ['--max-semi-space-size=2', '--optimize-for-size', '--max-old-space-size=256'];
 
 const log = createLogger('launcher', { echo: ARGS.includes('--debug') });
 
@@ -34,7 +39,7 @@ function start() {
     env.SYSLENS_TOKEN = state.token;
     args = ['--restarted', `--port=${state.port}`, ...ARGS.filter((a) => KEEP_ON_RESTART.test(a))];
   }
-  child = fork(SERVER, args, { env, stdio: 'inherit' });
+  child = fork(SERVER, args, { env, stdio: 'inherit', execArgv: SERVER_FLAGS });
   lastBeat = Date.now();
   child.on('message', (m) => {
     if (!m || typeof m !== 'object') return;

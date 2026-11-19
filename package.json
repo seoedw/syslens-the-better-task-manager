@@ -6,7 +6,7 @@
   "description": "A better Task Manager for Windows: every process, exactly where your RAM goes, and what fills your disk.",
   "main": "src/main/launcher.js",
   "scripts": {
-    "start": "node src/main/launcher.js",
+    "start": "node --jitless src/main/launcher.js",
     "dev": "node src/main/server.js --no-window",
     "selftest": "node scripts/selftest.js",
     "icon": "node scripts/make-icon.js",

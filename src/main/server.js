@@ -15,10 +15,16 @@ const { execFile } = require('child_process');
 const { Monitor } = require('./monitor');
 const { loadSystemInfo } = require('./sysinfo');
 const { StorageService } = require('./storage');
+const { NetworkService } = require('./network');
+const { ServicesService } = require('./services');
+const { StartupService } = require('./startup');
+const { HistoryService } = require('./history');
+const { MachineService } = require('./machine');
 const { iconDataUrl } = require('./icons');
 const shellx = require('./shell');
-const { createLogger, DATA_DIR } = require('./log');
+const { createLogger, DATA_DIR, LOG_FILE } = require('./log');
 const pkg = require('../../package.json');
+const os = require('os');
 
 function parseArgs(list) {
   const out = {};
@@ -75,6 +81,12 @@ let port = 0;
 let server = null;
 let monitor = null;
 let storage = null;
+// Loaded on demand, when their page is opened.
+const network = new NetworkService();
+const services = new ServicesService();
+const startup = new StartupService();
+const history = new HistoryService();
+const machine = new MachineService();
 let HANDLERS = {};
 const clients = new Map(); // event-stream response -> { page, needsFull, leaving }
 let everConnected = false;
@@ -156,14 +168,18 @@ function broadcast(event, data) {
 }
 
 // ---------- compact snapshot stream ----------
-// Static per-process/per-app details (names, paths, descriptions) are sent once and again
+// Static per-process/per-app details (names, paths, window titles) are sent once and again
 // only when they change; each tick carries just the numbers. History is sent in full when a
-// client connects, then one new point per tick. bridge.js reassembles the full snapshot.
-const P_META = ['pid', 'ppid', 'name', 'created', 'session', 'exe', 'path', 'pathGuessed', 'role', 'access', 'priority', 'desc', 'company', 'display', 'isWindows', 'critical', 'group', 'host'];
-const P_DYN = ['cpu', 'cpuTime', 'priv', 'ws', 'peakWs', 'commit', 'pagedPool', 'nonpagedPool', 'pageFaults', 'ioR', 'ioW', 'ioO', 'io', 'ioTotal', 'handles', 'threads', 'gpu', 'gpuShared', 'gpuDedicated', 'windows'];
-const G_META = ['name', 'exe', 'path', 'company', 'desc', 'host', 'type', 'critical'];
-const G_DYN = ['count', 'pids', 'cpu', 'priv', 'ws', 'commit', 'gpu', 'gpuShared', 'gpuDedicated', 'io', 'handles', 'threads', 'windows', 'hasWindows'];
-let sentMeta = { procs: new Map(), groups: new Map() };
+// client connects, then one new point per tick, and the system inventory only when it
+// changes. Per-process rows (the bulk of each tick) are left out unless a page that shows
+// them is open: see 'app:need'. bridge.js reassembles the full snapshot.
+const P_META = ['pid', 'ppid', 'name', 'created', 'session', 'exe', 'path', 'pathGuessed', 'role', 'access', 'priority', 'desc', 'company', 'display', 'isWindows', 'critical', 'group', 'host', 'windows'];
+const P_DYN = ['cpu', 'cpuTime', 'priv', 'ws', 'peakWs', 'commit', 'pagedPool', 'nonpagedPool', 'pageFaults', 'ioR', 'ioW', 'ioO', 'io', 'ioTotal', 'handles', 'threads', 'gpu', 'gpuShared', 'gpuDedicated'];
+const G_META = ['name', 'exe', 'path', 'company', 'desc', 'host', 'type', 'critical', 'windows', 'hasWindows'];
+const G_DYN = ['count', 'pids', 'cpu', 'priv', 'ws', 'commit', 'gpu', 'gpuShared', 'gpuDedicated', 'io', 'handles', 'threads'];
+const PROCS_LEASE = 20000;
+let sentMeta = { procs: new Map(), groups: new Map(), sys: '' };
+let procsWantedUntil = 0;
 
 function packRows(list, metaFields, dynFields, sentMap, full) {
   const meta = {};
@@ -187,26 +203,28 @@ function packRows(list, metaFields, dynFields, sentMap, full) {
   return { meta, rows, next };
 }
 
-function packSnapshot(s, full) {
-  const { procs, groups, hist, ...rest } = s;
-  const p = packRows(procs, P_META, P_DYN, sentMeta.procs, full);
+function packSnapshot(s, full, withProcs = true) {
+  const { procs, groups, hist, sys, ...rest } = s;
+  const p = full || withProcs ? packRows(procs, P_META, P_DYN, sentMeta.procs, full) : null;
   const g = packRows(groups, G_META, G_DYN, sentMeta.groups, full);
-  const out = { ...rest, packed: { pf: P_DYN, pm: p.meta, pr: p.rows, gf: G_DYN, gm: g.meta, gr: g.rows } };
+  const out = { ...rest, packed: { pf: P_DYN, pm: p ? p.meta : {}, pr: p ? p.rows : null, gf: G_DYN, gm: g.meta, gr: g.rows } };
+  const sysJson = JSON.stringify(sys || null);
+  if (full || sysJson !== sentMeta.sys) out.sys = sys;
   if (full) {
     out.hist = hist;
   } else {
     out.histTail = {};
     for (const [k, arr] of Object.entries(hist)) out.histTail[k] = arr[arr.length - 1];
   }
-  return { out, next: { procs: p.next, groups: g.next } };
+  return { out, next: { procs: p ? p.next : sentMeta.procs, groups: g.next, sys: sysJson } };
 }
 
 function broadcastSnapshot(s) {
   if (!clients.size) {
-    sentMeta = { procs: new Map(), groups: new Map() };
+    sentMeta = { procs: new Map(), groups: new Map(), sys: '' };
     return;
   }
-  const { out, next } = packSnapshot(s, false);
+  const { out, next } = packSnapshot(s, false, Date.now() < procsWantedUntil);
   sentMeta = next;
   const delta = sse('snapshot', out);
   let full = null;
@@ -234,7 +252,28 @@ function buildHandlers() {
       monitor.setBackground(!visible);
       return true;
     },
-    'app:info': () => ({ version: pkg.version, admin: monitor.admin }),
+    // Pages that list individual processes renew this lease while they are on screen.
+    'app:need': (what) => {
+      if (what && what.procs) procsWantedUntil = Date.now() + PROCS_LEASE;
+      return true;
+    },
+    'app:info': () => ({
+      version: pkg.version,
+      admin: monitor.admin,
+      node: process.version,
+      user: os.userInfo().username,
+      host: os.hostname(),
+      dataDir: DATA_DIR,
+      logFile: LOG_FILE,
+      appDir: path.resolve(__dirname, '..', '..'),
+    }),
+    'app:openLog': () => shellx.showItem(LOG_FILE),
+    'machine:get': (refresh) => machine.get(!!refresh),
+    'net:connections': (opts) => network.connections({ pid: opts && Number.isInteger(opts.pid) ? opts.pid : null, resolve: !(opts && opts.resolve === false) }),
+    'net:adapters': (refresh) => network.adapterInfo(!!refresh),
+    'services:list': (refresh) => services.list(!!refresh),
+    'startup:list': (refresh) => startup.list(!!refresh),
+    'history:get': (refresh) => history.get(!!refresh),
     'app:elevate': () => elevate(),
     'proc:details': (pid) => (Number.isInteger(pid) ? monitor.procs.details(pid) : null),
     'proc:kill': (targets) => {
@@ -481,7 +520,7 @@ async function attachToExisting() {
 function elevate() {
   if (monitor.admin) return { ok: true };
   const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
-  const args = `"${path.join(__dirname, 'launcher.js')}" --adopt=${port} --parent-token=${token}`;
+  const args = `--jitless "${path.join(__dirname, 'launcher.js')}" --adopt=${port} --parent-token=${token}`;
   const command = `Start-Process -FilePath ${q(process.execPath)} -ArgumentList ${q(args)} -Verb RunAs -WindowStyle Hidden`;
   return new Promise((resolve) => {
     execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { windowsHide: true }, (err) => {

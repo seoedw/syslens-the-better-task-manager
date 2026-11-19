@@ -79,11 +79,89 @@ const U = (() => {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   }
 
-  /** Background tint proportional to value/max, Task-Manager style. */
+  /** Amber background tint proportional to value/max, Task Manager style. */
   function heat(value, max) {
     const a = Math.max(0, Math.min(1, value / max));
     if (a < 0.02) return '';
-    return `style="background-color: rgba(var(--heat), ${(0.06 + a * 0.32).toFixed(3)})"`;
+    return `style="background-color: rgba(var(--heat), ${(0.05 + a * 0.3).toFixed(3)})"`;
+  }
+
+  function time(t) {
+    return t ? new Date(t).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '—';
+  }
+
+  /** "Today", "Yesterday", "Monday" (this week), or a date. */
+  function dayName(t) {
+    const d = new Date(t);
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const diff = Math.floor((start - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 86400000);
+    if (diff <= 0) return 'Today';
+    if (diff === 1) return 'Yesterday';
+    if (diff < 7) return d.toLocaleDateString(undefined, { weekday: 'long' });
+    return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  }
+
+  function when(t) {
+    return t ? `${dayName(t)} ${time(t)}` : '—';
+  }
+
+  /** "45 s", "22 min", "3 h 5 min", "2 d 4 h". */
+  function span(ms) {
+    if (ms == null || ms < 0) return '—';
+    const m = Math.round(ms / 60000);
+    if (ms < 60000) return `${Math.round(ms / 1000)} s`;
+    if (m < 60) return `${m} min`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h} h${m % 60 ? ` ${m % 60} min` : ''}`;
+    return `${Math.floor(h / 24)} d${h % 24 ? ` ${h % 24} h` : ''}`;
+  }
+
+  function watts(w) {
+    if (w == null) return '—';
+    return w >= 10 ? `${w.toFixed(0)} W` : `${w.toFixed(1)} W`;
+  }
+
+  /** Property rows: [[label, valueHtml, valueClass?], …]; falsy rows are skipped. */
+  function props(rows) {
+    return `<div class="props">${rows
+      .filter(Boolean)
+      .map(([k, v, cls]) => `<div class="prop"><div class="k">${k}</div><div class="v${cls ? ` ${cls}` : ''}">${v == null || v === '' ? '<span class="faint">—</span>' : v}</div></div>`)
+      .join('')}</div>`;
+  }
+
+  /** A coloured-dot status: level is ok | warn | bad | off | info. */
+  function status(text, level = 'ok') {
+    return `<span class="status ${level}">${esc(text)}</span>`;
+  }
+
+  /** Text that "Hide personal info" blurs (MAC addresses, network names, serials…). */
+  function pii(text) {
+    return `<span class="pii">${esc(text)}</span>`;
+  }
+
+  // Outline glyphs for lists (events, search results).
+  const GLYPHS = {
+    power: '<path d="M12 3v8"/><path d="M6.4 6.6a8 8 0 1 0 11.2 0"/>',
+    sleep: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
+    wake: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/>',
+    standby: '<rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/><path d="M9 10.5h6"/>',
+    plug: '<path d="M9 3v5M15 3v5"/><path d="M6 8h12v3a6 6 0 0 1-12 0z"/><path d="M12 17v4"/>',
+    battery: '<rect x="2.5" y="7" width="17" height="10" rx="2"/><path d="M21.5 10.5v3"/>',
+    crash: '<circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/>',
+    hang: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    update: '<path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v4h-4"/>',
+    install: '<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 20h16"/>',
+    service: '<circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21"/>',
+    warn: '<path d="M12 3.5L2.5 20h19z"/><path d="M12 10v4.5M12 17.5h.01"/>',
+    page: '<rect x="4" y="3.5" width="16" height="17" rx="2"/><path d="M8 8.5h8M8 12h8M8 15.5h5"/>',
+    action: '<path d="M13 3L5 13.5h6L10 21l8-10.5h-6z"/>',
+    app: '<rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M3.5 8.5h17"/>',
+    folder: '<path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2.5h8.5A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/>',
+    net: '<path d="M8.6 16a5 5 0 0 1 6.8 0"/><path d="M5.3 12.6a9.6 9.6 0 0 1 13.4 0"/><path d="M12 19.5h.01"/>',
+  };
+  function glyph(name, cls = 'gl') {
+    return `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${GLYPHS[name] || GLYPHS.page}</svg>`;
   }
 
   function minibar(fraction, color) {
@@ -130,8 +208,8 @@ const U = (() => {
       const root = document.getElementById('modalRoot');
       root.innerHTML = `<div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true">
         <h3>${esc(title)}</h3><div class="body">${body}</div>
-        <div class="actions"><button class="btn" data-a="no">${esc(cancelLabel)}</button>
-        <button class="btn ${danger ? 'danger solid' : 'primary'}" data-a="yes">${esc(confirmLabel)}</button></div></div></div>`;
+        <div class="actions"><button class="btn ${danger ? 'danger solid' : 'primary'}" data-a="yes">${esc(confirmLabel)}</button>
+        <button class="btn" data-a="no">${esc(cancelLabel)}</button></div></div></div>`;
       const close = (v) => {
         root.innerHTML = '';
         document.removeEventListener('keydown', onKey, true);
@@ -322,6 +400,11 @@ const U = (() => {
     ago,
     date,
     day,
+    time,
+    dayName,
+    when,
+    span,
+    watts,
     num,
     esc,
     $,
@@ -329,6 +412,10 @@ const U = (() => {
     cssVar,
     heat,
     minibar,
+    props,
+    status,
+    pii,
+    glyph,
     confirm,
     toast,
     icon,

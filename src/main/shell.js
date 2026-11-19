@@ -12,6 +12,14 @@ const SETTINGS_PAGES = {
   apps: 'ms-settings:appsfeatures',
   startup: 'ms-settings:startupapps',
   power: 'ms-settings:powersleep',
+  battery: 'ms-settings:batterysaver',
+  network: 'ms-settings:network-status',
+  wifi: 'ms-settings:network-wifi',
+  update: 'ms-settings:windowsupdate-history',
+  about: 'ms-settings:about',
+  display: 'ms-settings:display',
+  security: 'windowsdefender:',
+  services: 'services.msc',
 };
 
 function isSafePath(p) {
@@ -45,7 +53,8 @@ function openFolder(p) {
 
 function openSettings(page) {
   if (!Object.prototype.hasOwnProperty.call(SETTINGS_PAGES, page)) return false;
-  launch('explorer.exe', [SETTINGS_PAGES[page]]);
+  if (page === 'services') launch('mmc.exe', ['services.msc']);
+  else launch('explorer.exe', [SETTINGS_PAGES[page]]);
   return true;
 }
 
@@ -82,6 +91,20 @@ function findBrowser() {
   return candidates.find((p) => p && fs.existsSync(p)) || null;
 }
 
+// Measured on a Ryzen laptop: these cut the window from ~400 MB to ~170 MB. Software
+// rendering replaces a GPU process holding ~170 MB (the UI is light enough for the CPU), and
+// Edge's built-in extensions (seven ~12 MB processes), spare renderer and background update
+// checks are left out. They only apply when the window's browser process starts.
+const LEAN_FLAGS = [
+  '--disable-gpu',
+  '--disable-extensions',
+  '--disable-component-extensions-with-background-pages',
+  '--disable-background-networking',
+  '--disable-component-update',
+  '--disable-default-apps',
+  '--disable-features=SpareRendererForSitePerProcess',
+];
+
 /**
  * Open the UI in its own app window. A dedicated browser profile makes it a separate
  * browser process, so the returned child exits when the window is closed.
@@ -102,6 +125,7 @@ function openAppWindow(url, profileDir) {
       '--no-default-browser-check',
       '--disable-sync',
       '--window-size=1400,900',
+      ...LEAN_FLAGS,
     ],
     { detached: true, stdio: 'ignore' },
   );

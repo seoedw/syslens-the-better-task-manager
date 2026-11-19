@@ -407,6 +407,7 @@ class ProcessMonitor {
     }
     children.sort((a, b) => b.priv - a.priv);
     const kb = knowledge(p.exe);
+    const token = pid > 4 ? w.processToken(pid) : null;
     return {
       ...p,
       about: kb ? kb.about : null,
@@ -414,6 +415,10 @@ class ProcessMonitor {
       cmd: m.cmd,
       version: info ? info.version : '',
       product: info ? info.product : '',
+      user: token ? token.user : null,
+      integrity: token ? token.integrity : null,
+      elevated: token ? token.elevated : null,
+      arch: pid > 4 ? w.processArch(pid) : null,
       parents: chain,
       children,
     };

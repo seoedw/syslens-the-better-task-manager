@@ -39,6 +39,31 @@
     return () => listeners.get(channel).delete(cb);
   }
 
+  // "Hide personal info": the user name and PC name are replaced in everything that arrives,
+  // before any page sees it (paths, accounts, window titles…).
+  let masks = [];
+  function setPrivacy(on, names = {}) {
+    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    masks = !on
+      ? []
+      : [
+          [names.user, 'User'],
+          [names.host, 'MY-PC'],
+        ]
+          .filter(([n]) => n && n.length >= 2)
+          .map(([n, to]) => [new RegExp(`(?<![A-Za-z0-9])${esc(n)}(?![A-Za-z0-9])`, 'gi'), to]);
+  }
+  function unmask(text) {
+    for (const [re, to] of masks) text = text.replace(re, to);
+    return text;
+  }
+  // Applied before the first byte of data arrives, so nothing is ever shown unmasked.
+  try {
+    if (localStorage.getItem('privacy') === '1') setPrivacy(true, JSON.parse(localStorage.getItem('privacy-names') || '{}'));
+  } catch {
+    /* storage unavailable */
+  }
+
   async function invoke(channel, ...args) {
     const res = await fetch('/api/call', {
       method: 'POST',
@@ -48,13 +73,15 @@
     });
     if (res.status === 403) emit('auth-failed', true);
     if (!res.ok) throw new Error(`${channel} failed (${res.status})`);
-    return res.json();
+    return JSON.parse(unmask(await res.text()));
   }
 
   // Reassemble the compact snapshot stream (see packSnapshot in server.js).
   const procMeta = new Map();
   const groupMeta = new Map();
   let hist = null;
+  let lastProcs = []; // per-process rows only come while a page that lists processes is open
+  let lastSys = null; // the inventory only comes when it changes
 
   function rebuild(rows, fields, metaMap) {
     const live = new Set();
@@ -85,7 +112,9 @@
         if (arr.length > len) arr.shift();
       }
     }
-    const out = { ...s, procs: rebuild(pk.pr, pk.pf, procMeta), groups: rebuild(pk.gr, pk.gf, groupMeta), hist: hist || {} };
+    if (pk.pr) lastProcs = rebuild(pk.pr, pk.pf, procMeta);
+    if (s.sys) lastSys = s.sys;
+    const out = { ...s, sys: lastSys, procs: lastProcs, procsLive: !!pk.pr, groups: rebuild(pk.gr, pk.gf, groupMeta), hist: hist || {} };
     delete out.packed;
     delete out.histTail;
     return out;
@@ -96,6 +125,8 @@
     procMeta.clear();
     groupMeta.clear();
     hist = null;
+    lastProcs = [];
+    lastSys = null;
   }
 
   function dispatch(block) {
@@ -108,7 +139,7 @@
     if (!data.length) return;
     let payload;
     try {
-      payload = JSON.parse(data.join('\n'));
+      payload = JSON.parse(unmask(data.join('\n')));
     } catch {
       return;
     }
@@ -268,9 +299,18 @@
     onAuthFailed: (cb) => on('auth-failed', cb),
     onHandoff: (cb) => on('handoff', cb),
     reconnect: () => checkNow(),
+    privacyActive: () => masks.length > 0,
     snapshot: () => invoke('snapshot'),
+    machine: (refresh) => invoke('machine:get', !!refresh),
+    connections: (opts) => invoke('net:connections', opts || {}),
+    adapters: (refresh) => invoke('net:adapters', !!refresh),
+    services: (refresh) => invoke('services:list', !!refresh),
+    startup: (refresh) => invoke('startup:list', !!refresh),
+    history: (refresh) => invoke('history:get', !!refresh),
+    openLog: () => invoke('app:openLog'),
     setInterval: (ms) => invoke('interval', ms),
     setVisible: (visible) => invoke('app:visible', visible),
+    need: (what) => invoke('app:need', what),
     details: (pid) => invoke('proc:details', pid),
     kill: (targets) => invoke('proc:kill', targets),
     icon: (path) => invoke('icon', path),

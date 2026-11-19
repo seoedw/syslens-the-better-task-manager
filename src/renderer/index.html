@@ -87,9 +87,9 @@
     <div class="tooltip" id="tooltip"></div>
     <div id="modalRoot"></div>
     <div class="toasts" id="toasts"></div>
-    <div class="offline" id="offline" role="status" aria-live="polite">
+    <div class="offline" id="offline" role="status">
       <div class="offline-msg">
-        <span id="offlineText">Connection lost. Reconnecting…</span>
+        <span><span id="offlineText">Connection lost.</span> <span id="offlineCountdown" aria-hidden="true">Reconnecting…</span></span>
         <span class="offline-hint" id="offlineHint" hidden></span>
       </div>
       <button type="button" class="offline-btn" id="offlineRetry">Retry now</button>

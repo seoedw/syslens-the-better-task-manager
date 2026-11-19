@@ -86,21 +86,29 @@ const App = (() => {
   let linkLost = false; // the server doesn't accept this window's token any more
   let handingOff = false; // switching to the administrator instance
 
+  const setText = (el, s) => {
+    if (el.textContent !== s) el.textContent = s; // unchanged text isn't announced again
+  };
+
   function renderOffline() {
-    const text = U.$('#offlineText');
     const hint = U.$('#offlineHint');
+    let head;
+    let countdown = '';
     if (linkLost) {
-      text.textContent = 'This window is no longer linked to SysLens.';
-      hint.textContent = 'Close it and open SysLens again from the desktop or Start menu.';
+      head = 'This window is no longer linked to SysLens.';
+      setText(hint, 'Close it and open SysLens again from the desktop or Start menu.');
       hint.hidden = false;
-      return;
+    } else {
+      const secs = retryAt ? Math.max(1, Math.ceil((retryAt - Date.now()) / 1000)) : 0;
+      const long = Date.now() - offlineSince > 20000;
+      head = handingOff ? 'Switching to administrator mode.' : long ? 'SysLens isn’t responding.' : 'Connection lost.';
+      countdown = secs ? `Retrying in ${secs}s…` : 'Reconnecting…';
+      setText(hint, 'If SysLens was closed, open it again from the desktop or Start menu.');
+      hint.hidden = !long;
     }
-    const secs = retryAt ? Math.max(1, Math.ceil((retryAt - Date.now()) / 1000)) : 0;
-    const long = Date.now() - offlineSince > 20000;
-    const head = handingOff ? 'Switching to administrator mode.' : long ? 'SysLens isn’t responding.' : 'Connection lost.';
-    text.textContent = `${head} ${secs ? `Retrying in ${secs}s…` : 'Reconnecting…'}`;
-    hint.textContent = 'If SysLens was closed, open it again from the desktop or Start menu.';
-    hint.hidden = !long;
+    // Screen readers get the message; the ticking countdown is hidden from them.
+    setText(U.$('#offlineText'), head);
+    setText(U.$('#offlineCountdown'), countdown);
   }
 
   function onConnection(up) {

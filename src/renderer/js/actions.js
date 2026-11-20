@@ -512,6 +512,36 @@ const Actions = (() => {
     });
   }
 
+  const NORMAL_NOTES = [
+    'A normal SysLens window opens and this administrator window closes. Your settings carry over.',
+    'Anything already done in administrator mode stays done: a service you started keeps running, and a program you started as administrator keeps its rights.',
+    'To come back later, click Run as administrator. Windows asks for permission again.',
+  ];
+
+  /** "Are you sure?" before leaving administrator mode, with what stops working. */
+  function confirmDeElevate() {
+    return new Promise((resolve) => {
+      let answered = false;
+      const m = U.modal({
+        title: 'Go back to normal mode?',
+        wide: true,
+        body: `<p class="muted" style="margin:0 0 10px">Without administrator rights, SysLens can no longer:</p>
+          ${adminList()}
+          <div class="admin-notes"><div class="set-sub" style="margin:4px 0 6px">Good to know</div><ul>${NORMAL_NOTES.map((n) => `<li>${U.esc(n)}</li>`).join('')}</ul></div>
+          <div class="actions"><button class="btn primary" id="ad-normal-yes">Back to normal mode</button><button class="btn" data-modal-close>Cancel</button></div>`,
+        onClose: () => {
+          if (!answered) resolve(false);
+        },
+      });
+      m.el.querySelector('#ad-normal-yes').addEventListener('click', () => {
+        answered = true;
+        m.close();
+        resolve(true);
+      });
+      m.el.querySelector('#ad-normal-yes').focus();
+    });
+  }
+
   /** Already administrator: what that makes possible. */
   function adminInfo() {
     U.modal({
@@ -636,6 +666,7 @@ const Actions = (() => {
     startupToggle,
     serviceControl,
     confirmElevate,
+    confirmDeElevate,
     adminInfo,
     restartApp,
     isExplorer,

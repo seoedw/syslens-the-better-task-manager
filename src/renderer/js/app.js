@@ -438,9 +438,10 @@ const App = (() => {
     else U.toast((r && r.error) || 'Could not restart as administrator.', 'warn');
   }
 
-  /** Leave administrator mode: a normal SysLens window opens and this one closes. */
+  /** Leave administrator mode (after asking): a normal SysLens window opens and this one closes. */
   async function deElevate() {
     if (!(api.snap && api.snap.admin)) return U.toast('SysLens is already running in normal mode.', 'info');
+    if (!(await Actions.confirmDeElevate())) return;
     const r = await syslens.deElevate().catch(() => null);
     if (!(r && r.ok)) U.toast((r && r.error) || 'Couldn’t go back to normal mode. Close this window and open SysLens again.', 'warn', 9000);
   }

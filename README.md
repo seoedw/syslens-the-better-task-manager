@@ -9,7 +9,7 @@
 Every process, where your RAM really goes, what fills your disk, what starts with Windows,
 and what your PC did while you were away. In plain language, on one screen.
 
-### **[Download SysLens Beta 1.4.3](https://github.com/seoedw/syslens-the-better-task-manager/releases/latest/download/SysLens-Beta-1.4.3-portable.zip)** (38 MB)
+### **[Download SysLens Beta 1.4.4](https://github.com/seoedw/syslens-the-better-task-manager/releases/latest/download/SysLens-Beta-1.4.4-portable.zip)** (38 MB)
 
 **It brings its own Node.js, so there's nothing else to install.** Unzip it and double-click **Install SysLens.cmd** ([step by step](#download-the-beta)).
 
@@ -17,7 +17,7 @@ and what your PC did while you were away. In plain language, on one screen.
 <img alt="Node.js 20 or newer, or the portable build" src="https://img.shields.io/badge/Node.js-20%2B%20or%20portable-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white">
 <img alt="No administrator rights needed" src="https://img.shields.io/badge/admin-not%20needed-3a3a3a?style=flat-square">
 <img alt="No telemetry" src="https://img.shields.io/badge/telemetry-none-3a3a3a?style=flat-square">
-<img alt="Version 1.4.3 beta" src="https://img.shields.io/badge/version-1.4.3%20beta-3a3a3a?style=flat-square">
+<img alt="Version 1.4.4 beta" src="https://img.shields.io/badge/version-1.4.4%20beta-3a3a3a?style=flat-square">
 <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-3a3a3a?style=flat-square">
 
 [Download](#download-the-beta) · [Install](#install) · [What it shows](#what-it-shows) · [Screenshots](#screenshots) · [Shortcuts](#keyboard-shortcuts) · [FAQ](#faq) · [How it works](#how-it-works) · [Changelog](CHANGELOG.md) · [Feedback](#feedback) · [License](#license)
@@ -197,7 +197,7 @@ SysLens never deletes anything. Storage shows where the space went and opens the
 
 ## Download the beta
 
-**[Download SysLens Beta 1.4.3](https://github.com/seoedw/syslens-the-better-task-manager/releases/latest/download/SysLens-Beta-1.4.3-portable.zip)** (`SysLens-Beta-1.4.3-portable.zip`, 38 MB), or pick it from **[Releases](https://github.com/seoedw/syslens-the-better-task-manager/releases)**. **It brings its own Node.js, so there's nothing else to install.**
+**[Download SysLens Beta 1.4.4](https://github.com/seoedw/syslens-the-better-task-manager/releases/latest/download/SysLens-Beta-1.4.4-portable.zip)** (`SysLens-Beta-1.4.4-portable.zip`, 38 MB), or pick it from **[Releases](https://github.com/seoedw/syslens-the-better-task-manager/releases)**. **It brings its own Node.js, so there's nothing else to install.**
 
 1. Right-click the zip, choose **Properties**, tick **Unblock** if it's there, and click OK. (Windows marks downloaded files; this keeps it from asking about each one.)
 2. Unzip it somewhere permanent, such as Documents.
@@ -249,7 +249,7 @@ On a PC that has Node.js, run `npm run portable`. It builds `dist\SysLens-1.3.0-
 
 </details>
 
-**Run as administrator.** Without admin rights, Windows hides a few things (the full paths and command lines of some system processes, and a few protected folders) and won't let you start or stop most services or change other users' processes. Click **Run as administrator** in the sidebar: SysLens first lists everything administrator mode lets you do and asks you to confirm, then opens again as administrator in a new window, and the old one closes. Once it's administrator, clicking **Running as administrator** shows that list again, and **Back to normal mode** (right under it, in that list, or in Ctrl+K search) opens SysLens in a normal window again and closes the administrator one.
+**Run as administrator.** Without admin rights, Windows hides a few things (the full paths and command lines of some system processes, and a few protected folders) and won't let you start or stop most services or change other users' processes. Click **Run as administrator** in the sidebar: SysLens first lists everything administrator mode lets you do and asks you to confirm, then opens again as administrator in a new window, and the old one closes. Once it's administrator, clicking **Running as administrator** shows that list again, and **Back to normal mode** (right under it, in that list, or in Ctrl+K search) asks first, listing what stops working, then opens SysLens in a normal window again and closes the administrator one.
 
 **Updates take effect when you reopen SysLens.** If a newer SysLens is opened while an older one is still running (or one whose window you just closed), the old one steps aside and the new version starts.
 

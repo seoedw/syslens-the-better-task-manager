@@ -3,6 +3,14 @@
 Every SysLens release and what changed in it. SysLens shows the newest entry once after it
 updates (Settings › About › What’s new shows it again).
 
+## [1.4.4] - 2026-11-20 (Beta)
+
+A small update. **It brings its own Node.js, so there's nothing else to install.**
+
+### Changed
+
+- **Back to normal mode asks first.** A "Go back to normal mode?" dialog lists everything SysLens can no longer do without administrator rights, says what happens (a normal window opens, this one closes, your settings carry over, and coming back needs Windows' permission again), and has **Back to normal mode** and **Cancel**. The sidebar button, the administrator popup and Ctrl+K search all go through it; Cancel and Esc leave you in administrator mode.
+
 ## [1.4.3] - 2026-11-19 (Beta)
 
 A small update. **It brings its own Node.js, so there's nothing else to install.**

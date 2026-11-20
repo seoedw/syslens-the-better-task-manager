@@ -26,6 +26,7 @@ const api = {
   OpenProcess: kernel32.func('intptr_t __stdcall OpenProcess(uint32 access, int inherit, uint32 pid)'),
   CloseHandle: kernel32.func('int __stdcall CloseHandle(intptr_t h)'),
   CreateFileW: kernel32.func('intptr_t __stdcall CreateFileW(const char16_t *name, uint32 access, uint32 share, void *sa, uint32 disposition, uint32 flags, intptr_t template)'),
+  GetCompressedFileSizeW: kernel32.func('uint32 __stdcall GetCompressedFileSizeW(const char16_t *name, _Out_ uint32 *high)'),
   QueryFullProcessImageNameW: kernel32.func('int __stdcall QueryFullProcessImageNameW(intptr_t h, uint32 flags, void *buf, _Inout_ uint32 *size)'),
   TerminateProcess: kernel32.func('int __stdcall TerminateProcess(intptr_t h, uint32 code)'),
   GetPriorityClass: kernel32.func('uint32 __stdcall GetPriorityClass(intptr_t h)'),

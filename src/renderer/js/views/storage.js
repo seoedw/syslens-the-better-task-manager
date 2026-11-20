@@ -315,7 +315,10 @@ const Storage = (() => {
   function summaryNotice() {
     const s = st.summary;
     if (!s) return '';
-    const parts = [`Scanned <b>${U.esc(s.root)}</b>: <b>${U.bytes(s.size)}</b> in ${U.num(s.files)} files and ${U.num(s.dirs)} folders (${U.dur(s.took)}).`];
+    const parts = [`Scanned <b>${U.esc(s.root)}</b>: <b>${U.bytes(s.size)}</b> on disk in ${U.num(s.files)} files and ${U.num(s.dirs)} folders (${U.dur(s.took)}).`];
+    if (s.shrunkFiles > 0) {
+      parts.push(`Sizes are what files really take on disk: ${U.num(s.shrunkFiles)} sparse or compressed file${s.shrunkFiles === 1 ? '' : 's'} (virtual machine disks, game images and the like) say they're <b>${U.bytes(s.shrunkBytes)}</b> bigger than the space they use, and that isn't counted.`);
+    }
     const drive = (st.drives || []).find((d) => d.ready && d.root.toUpperCase() === s.root.toUpperCase());
     if (drive && drive.used > s.size) {
       parts.push(`<b>${U.bytes(drive.used - s.size)}</b> of used space isn't visible to a folder scan — restore points and shadow copies (System Volume Information), NTFS metadata${s.denied ? ' and the protected folders below' : ''}.`);
@@ -352,7 +355,7 @@ const Storage = (() => {
         const action = it.dir ? `<button class="btn sm" data-open="${U.esc(it.path)}">Open</button>` : it.aggregate ? '' : `<button class="btn sm" data-show="${U.esc(it.path)}">Show</button>`;
         return `<tr class="${it.dir ? 'click' : ''}" ${it.dir ? `data-cd="${U.esc(it.path)}"` : ''} ${it.aggregate ? '' : `data-path="${U.esc(it.path)}" data-kind="${it.dir ? 'dir' : 'file'}" data-name="${U.esc(it.name)}"`}>
           <td>${nameCell}</td>
-          <td class="r" style="width:96px;font-weight:600">${U.bytes(it.size)}</td>
+          <td class="r" style="width:96px;font-weight:600">${sizeHtml(it)}</td>
           <td style="width:22%"><div class="sizebar">${U.minibar(it.size / max)}<span class="faint tabular" style="width:44px;text-align:right">${(share * 100).toFixed(1)}%</span></div></td>
           <td class="r faint" style="width:120px">${info}</td>
           <td class="r" style="width:80px">${action}</td></tr>`;
@@ -372,13 +375,23 @@ const Storage = (() => {
       <div class="card" style="padding:10px;margin-bottom:14px"><div class="treemap" id="sg-tm"></div></div>
       ${guardLegend(L.items)}
       <div class="card" style="padding:4px 8px">
-        <table class="list-table"><thead><tr><th>Name</th><th class="r" style="width:96px">Size</th><th style="width:22%">Share of this folder</th><th class="r" style="width:120px">Files / modified</th><th style="width:80px"></th></tr></thead><tbody>${rows}</tbody></table>
+        <table class="list-table"><thead><tr><th>Name</th><th class="r" style="width:96px" data-tip="What it takes on your drive">On disk</th><th style="width:22%">Share of this folder</th><th class="r" style="width:120px">Files / modified</th><th style="width:80px"></th></tr></thead><tbody>${rows}</tbody></table>
         ${L.more ? `<div class="faint" style="padding:10px">…and ${U.num(L.more)} smaller items</div>` : ''}
       </div>`;
     requestAnimationFrame(() => {
       const tm = U.$('#sg-tm');
       if (tm) Treemap.render(tm, L.items, { onOpen: (it) => cd(it.path) });
     });
+  }
+
+  /**
+   * A size on disk, with the file's own length under it when that's more: sparse files (virtual
+   * machine disks, game and emulator images) and compressed ones take less space than they say.
+   */
+  function sizeHtml(it) {
+    if (!(it.length > it.size)) return U.bytes(it.size);
+    const tip = `This file says it’s ${U.bytes(it.length)}, but only ${U.bytes(it.size)} of it is actually stored on disk: it’s a sparse or compressed file, and the empty parts take no space. Virtual machine disks and game images are often like this. Deleting it frees ${U.bytes(it.size)}.`;
+    return `<span data-tip="${U.esc(tip)}">${U.bytes(it.size)}<span class="size-of">of ${U.bytes(it.length)}</span></span>`;
   }
 
   // ---------- largest files ----------
@@ -392,14 +405,14 @@ const Storage = (() => {
     body.innerHTML = `
       ${summaryNotice()}
       <div class="card" style="padding:4px 8px"><table class="list-table">
-        <thead><tr><th style="width:34%">File</th><th>Folder</th><th class="r" style="width:96px">Size</th><th style="width:16%"></th><th class="r" style="width:120px">Modified</th><th style="width:72px"></th></tr></thead>
+        <thead><tr><th style="width:34%">File</th><th>Folder</th><th class="r" style="width:96px" data-tip="What the file takes on your drive">On disk</th><th style="width:16%"></th><th class="r" style="width:120px">Modified</th><th style="width:72px"></th></tr></thead>
         <tbody>${st.top
           .slice(0, 200)
           .map((f) => {
             const dir = f.path.slice(0, f.path.length - f.name.length - 1);
             return `<tr data-path="${U.esc(f.path)}" data-kind="file" data-name="${U.esc(f.name)}"><td><div style="display:flex;gap:8px;align-items:center;min-width:0">${FILE}<span class="nm" style="overflow:hidden;text-overflow:ellipsis" data-tip="${U.esc(f.path)}">${U.esc(f.name)}</span></div></td>
               <td class="sub" data-tip="${U.esc(dir)}">${U.esc(dir)}</td>
-              <td class="r" style="font-weight:600">${U.bytes(f.size)}</td><td>${U.minibar(f.size / max)}</td>
+              <td class="r" style="font-weight:600">${sizeHtml(f)}</td><td>${U.minibar(f.size / max)}</td>
               <td class="r faint">${U.day(f.mtime)}</td><td class="r"><button class="btn sm" data-show="${U.esc(f.path)}">Show</button></td></tr>`;
           })
           .join('')}</tbody></table></div>`;

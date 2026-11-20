@@ -3,6 +3,14 @@
 Every SysLens release and what changed in it. SysLens shows the newest entry once after it
 updates (Settings › About › What’s new shows it again).
 
+## [1.4.5] - 2026-11-20 (Beta)
+
+A small update. **It brings its own Node.js, so there's nothing else to install.**
+
+### Fixed
+
+- **Storage sizes are what files really take on disk.** Sparse files (virtual machine disks, game and emulator images) and compressed ones were counted at their full length: Google Play Games' `userdata.img` says it's 80 GB but holds 4.6 GB, so its folders looked 75 GB bigger than they are. Folder sizes, the treemap, largest files, file types, space hogs and app sizes now all use the size on disk; a file whose length is bigger shows it underneath ("4.6 GB of 80.0 GB"), and the scan summary says how much such files claim without using. The size columns are now called **On disk**.
+
 ## [1.4.4] - 2026-11-20 (Beta)
 
 A small update. **It brings its own Node.js, so there's nothing else to install.**

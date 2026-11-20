@@ -9,7 +9,7 @@
 Every process, where your RAM really goes, what fills your disk, what starts with Windows,
 and what your PC did while you were away. In plain language, on one screen.
 
-### **[Download SysLens Beta 1.4.4](https://github.com/seoedw/syslens-the-better-task-manager/releases/latest/download/SysLens-Beta-1.4.4-portable.zip)** (38 MB)
+### **[Download SysLens Beta 1.4.5](https://github.com/seoedw/syslens-the-better-task-manager/releases/latest/download/SysLens-Beta-1.4.5-portable.zip)** (38 MB)
 
 **It brings its own Node.js, so there's nothing else to install.** Unzip it and double-click **Install SysLens.cmd** ([step by step](#download-the-beta)).
 
@@ -17,7 +17,7 @@ and what your PC did while you were away. In plain language, on one screen.
 <img alt="Node.js 20 or newer, or the portable build" src="https://img.shields.io/badge/Node.js-20%2B%20or%20portable-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white">
 <img alt="No administrator rights needed" src="https://img.shields.io/badge/admin-not%20needed-3a3a3a?style=flat-square">
 <img alt="No telemetry" src="https://img.shields.io/badge/telemetry-none-3a3a3a?style=flat-square">
-<img alt="Version 1.4.4 beta" src="https://img.shields.io/badge/version-1.4.4%20beta-3a3a3a?style=flat-square">
+<img alt="Version 1.4.5 beta" src="https://img.shields.io/badge/version-1.4.5%20beta-3a3a3a?style=flat-square">
 <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-3a3a3a?style=flat-square">
 
 [Download](#download-the-beta) · [Install](#install) · [What it shows](#what-it-shows) · [Screenshots](#screenshots) · [Shortcuts](#keyboard-shortcuts) · [FAQ](#faq) · [How it works](#how-it-works) · [Changelog](CHANGELOG.md) · [Feedback](#feedback) · [License](#license)
@@ -89,6 +89,7 @@ It does the same for everything else it shows: which app is talking to which ser
 ### Storage
 - Drives, and the usual space hogs: Recycle Bin, temporary files, Downloads, update caches, browser data, developer caches, WSL and Docker disks, game libraries
 - A read-only full-drive scan with a clickable treemap, the largest files, a breakdown by file type, and installed apps by their measured size
+- **Sizes are what's really used on disk.** Sparse files, like virtual machine disks and game images (Google Play Games' 80 GB `userdata.img` that holds 5 GB), count at the space they take, with their full length shown underneath
 - **Shields show what's protected:** an amber **Locked** shield on folders only administrators can open, a blue **Protected** shield on folders you can look in but only administrators can change (Windows, Program Files), and no shield on folders that are yours to change
 
 ### Startup apps
@@ -197,7 +198,7 @@ SysLens never deletes anything. Storage shows where the space went and opens the
 
 ## Download the beta
 
-**[Download SysLens Beta 1.4.4](https://github.com/seoedw/syslens-the-better-task-manager/releases/latest/download/SysLens-Beta-1.4.4-portable.zip)** (`SysLens-Beta-1.4.4-portable.zip`, 38 MB), or pick it from **[Releases](https://github.com/seoedw/syslens-the-better-task-manager/releases)**. **It brings its own Node.js, so there's nothing else to install.**
+**[Download SysLens Beta 1.4.5](https://github.com/seoedw/syslens-the-better-task-manager/releases/latest/download/SysLens-Beta-1.4.5-portable.zip)** (`SysLens-Beta-1.4.5-portable.zip`, 38 MB), or pick it from **[Releases](https://github.com/seoedw/syslens-the-better-task-manager/releases)**. **It brings its own Node.js, so there's nothing else to install.**
 
 1. Right-click the zip, choose **Properties**, tick **Unblock** if it's there, and click OK. (Windows marks downloaded files; this keeps it from asking about each one.)
 2. Unzip it somewhere permanent, such as Documents.

@@ -60,7 +60,7 @@ function releasePoolLater() {
   }, POOL_IDLE_MS);
 }
 
-const EMPTY = { ok: false, subdirs: [], ownSize: 0, ownFiles: 0, big: null, links: 0, cloudBytes: 0, cloudFiles: 0 };
+const EMPTY = { ok: false, subdirs: [], ownSize: 0, ownFiles: 0, big: null, links: 0, cloudBytes: 0, cloudFiles: 0, shrunkBytes: 0, shrunkFiles: 0 };
 
 /**
  * Walk folder trees in parallel. `visit(item, result)` handles one enumerated folder and
@@ -129,14 +129,23 @@ function display(p) {
   return /^[A-Za-z]:$/.test(p) ? `${p}\\` : p;
 }
 
+const ATTR_SPARSE_OR_COMPRESSED = 0x200 | 0x800;
+const sizeHigh = [0];
+
 function statEntry(p) {
-  const h = api.FindFirstFileExW(longPath(normalize(p)), 1, findData, 0, null, 0);
+  const full = longPath(normalize(p));
+  const h = api.FindFirstFileExW(full, 1, findData, 0, null, 0);
   if (h === -1 || h === 0) return null;
   api.FindClose(h);
-  return {
-    attr: findData.readUInt32LE(0),
-    size: findData.readUInt32LE(28) * 4294967296 + findData.readUInt32LE(32),
-  };
+  const attr = findData.readUInt32LE(0);
+  let size = findData.readUInt32LE(28) * 4294967296 + findData.readUInt32LE(32);
+  // A sparse or compressed file counts at what it takes on disk, as in the scan.
+  if (!(attr & ATTR_DIRECTORY) && attr & ATTR_SPARSE_OR_COMPRESSED) {
+    sizeHigh[0] = 0;
+    const low = api.GetCompressedFileSizeW(full, sizeHigh);
+    if (!(low === 0xffffffff && sizeHigh[0] === 0)) size = Math.min(size, sizeHigh[0] * 4294967296 + low);
+  }
+  return { attr, size };
 }
 
 class Dir {
@@ -211,7 +220,7 @@ async function scan(id, rootArg) {
   const all = [root];
   const ext = new Map();
   const top = new TopFiles(300);
-  const stats = { files: 0, bytes: 0, denied: 0, deniedPaths: [], cloudBytes: 0, cloudFiles: 0, links: 0 };
+  const stats = { files: 0, bytes: 0, denied: 0, deniedPaths: [], cloudBytes: 0, cloudFiles: 0, links: 0, shrunkBytes: 0, shrunkFiles: 0 };
   const started = Date.now();
   const cancelled = () => current.cancelled || current.id !== id;
   let lastPost = 0;
@@ -244,6 +253,8 @@ async function scan(id, rootArg) {
       stats.links += r.links;
       stats.cloudBytes += r.cloudBytes;
       stats.cloudFiles += r.cloudFiles;
+      stats.shrunkBytes += r.shrunkBytes || 0;
+      stats.shrunkFiles += r.shrunkFiles || 0;
       const kids = new Array(r.subdirs.length);
       for (let i = 0; i < r.subdirs.length; i++) {
         const child = new Dir(r.subdirs[i], node);
@@ -264,7 +275,7 @@ async function scan(id, rootArg) {
           ext.set(e, [b, c]);
         }
       }
-      for (const [idx, name, size, mtime] of msg.top) top.add({ size, node: batch[idx].node, name, mtime });
+      for (const [idx, name, size, mtime, length] of msg.top) top.add({ size, node: batch[idx].node, name, mtime, length });
       const now = Date.now();
       if (now - lastPost > 150) {
         lastPost = now;
@@ -307,6 +318,8 @@ function summary() {
     deniedPaths: stats.deniedPaths,
     cloudBytes: stats.cloudBytes,
     cloudFiles: stats.cloudFiles,
+    shrunkBytes: stats.shrunkBytes,
+    shrunkFiles: stats.shrunkFiles,
     links: stats.links,
     took,
     finished,
@@ -335,9 +348,10 @@ function children(p) {
   const items = node.children.map((c) => ({ name: c.name, path: `${dir}\\${c.name}`, dir: true, size: c.size, files: c.files, dirs: c.dirs, denied: c.denied }));
   const big = node.big || [];
   let bigSize = 0;
-  for (const [name, size, mtime] of big) {
+  for (const [name, size, mtime, length] of big) {
     bigSize += size;
-    items.push({ name, path: `${dir}\\${name}`, dir: false, size, mtime });
+    // length: how long the file says it is, when that's more than it takes on disk (sparse/compressed)
+    items.push({ name, path: `${dir}\\${name}`, dir: false, size, mtime, length: length > size ? length : undefined });
   }
   const restFiles = node.ownFiles - big.length;
   if (restFiles > 0) items.push({ name: `${restFiles.toLocaleString()} smaller file${restFiles === 1 ? '' : 's'}`, path: dir, dir: false, aggregate: true, size: node.ownSize - bigSize, files: restFiles });
@@ -359,7 +373,7 @@ function children(p) {
 
 function topFiles() {
   if (!tree) return [];
-  return tree.top.sorted().map((f) => ({ name: f.name, path: `${pathOf(f.node)}\\${f.name}`, size: f.size, mtime: f.mtime }));
+  return tree.top.sorted().map((f) => ({ name: f.name, path: `${pathOf(f.node)}\\${f.name}`, size: f.size, mtime: f.mtime, length: f.length > f.size ? f.length : undefined }));
 }
 
 function types() {

@@ -4302,6 +4302,15 @@ kbd,
   gap: 6px;
 }
 
+/* A sparse or compressed file's own length, under what it takes on disk (Storage). */
+.size-of {
+  display: block;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
 /* ---- your pictures ---- */
 .pic-grid {
   display: grid;

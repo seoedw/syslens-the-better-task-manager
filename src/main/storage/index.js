@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 const { EventEmitter } = require('events');
 const { Worker } = require('worker_threads');
-const { recycleBin } = require('../win32');
+const { recycleBin, folderAccess } = require('../win32');
 const { runPowerShellJson } = require('../powershell');
 
 const APPS_SCRIPT = `
@@ -255,8 +255,21 @@ class StorageService extends EventEmitter {
     this.scanState.running = false;
   }
 
-  children(p) {
-    return this.workers.scan ? this.request('scan', { type: 'children', path: p }) : null;
+  /**
+   * A folder's contents from the last scan, each folder marked with how protected it is for this
+   * account (win32.folderAccess: 'locked', 'protected' or 'open'), and the folder itself too.
+   */
+  async children(p) {
+    if (!this.workers.scan) return null;
+    const listing = await this.request('scan', { type: 'children', path: p });
+    if (!listing || !Array.isArray(listing.items)) return listing;
+    const access = (item) => (item.denied ? 'locked' : folderAccess(item.path));
+    let checked = 0;
+    for (const it of listing.items) {
+      if (it.dir && checked++ < 400) it.access = access(it);
+    }
+    listing.access = access(listing);
+    return listing;
   }
 
   topFiles() {

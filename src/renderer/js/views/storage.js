@@ -28,6 +28,42 @@ const Storage = (() => {
   const FILE = '<svg viewBox="0 0 24 24" width="16" height="16" style="flex:none"><path fill="#8a95a8" d="M6 2h8l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm7 1.5V8h4.5z"/></svg>';
   const INFO = '<svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 15h-2v-6h2zm0-8h-2V7h2z"/></svg>';
 
+  // How protected a folder is for you (from the server: win32.folderAccess). The shield is the
+  // one Windows and the Tools page use for "needs administrator".
+  const SHIELD = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/></svg>';
+  function guardTip(access) {
+    const admin = App.snap && App.snap.admin;
+    if (access === 'locked') {
+      return admin
+        ? 'Locked: Windows keeps this folder to itself, so even as administrator SysLens can’t look inside or measure it.'
+        : 'Locked: only administrators can open this folder, so SysLens can’t look inside or measure it. Run as administrator to include it.';
+    }
+    if (access === 'protected') {
+      return admin
+        ? 'Protected: Windows owns this folder. Even as administrator you can look inside but not change or delete what’s in it.'
+        : 'Protected: you can look inside, but only administrators can add, change or delete what’s in it. Windows and installed programs keep their files in folders like this.';
+    }
+    return 'Yours: you can add, change and delete what’s in this folder.';
+  }
+  function guard(access, withYours = false) {
+    if (access === 'locked') return `<span class="guard locked" data-tip="${U.esc(guardTip(access))}">${SHIELD}Locked</span>`;
+    if (access === 'protected') return `<span class="guard protected" data-tip="${U.esc(guardTip(access))}">${SHIELD}Protected</span>`;
+    if (access === 'open' && withYours) return `<span class="guard open" data-tip="${U.esc(guardTip(access))}">Yours</span>`;
+    return '';
+  }
+  /** What the marks mean, with how many of each are in this folder. */
+  function guardLegend(items) {
+    const dirs = items.filter((i) => i.dir && i.access);
+    if (!dirs.length) return '';
+    const n = (a) => dirs.filter((i) => i.access === a).length;
+    const counts = [n('locked') && `${U.num(n('locked'))} locked`, n('protected') && `${U.num(n('protected'))} protected`, n('open') && `${U.num(n('open'))} yours`].filter(Boolean).join(', ');
+    return `<div class="guard-legend">
+      <span>${guard('locked')} only administrators can open it</span>
+      <span>${guard('protected')} you can look, only administrators can change it</span>
+      <span>No shield: yours to change</span>
+      <span class="faint">Folders here: ${counts}</span></div>`;
+  }
+
   const CATS = [
     ['Videos', '#e0609a', 'mp4 mkv mov avi wmv webm m4v mpg mpeg ts m2ts flv 3gp'],
     ['Pictures', '#e88a3a', 'jpg jpeg png gif heic heif webp bmp tif tiff raw cr2 cr3 nef arw dng psd svg ico'],
@@ -220,7 +256,7 @@ const Storage = (() => {
       const total = items.reduce((s, x) => s + x.bytes, 0);
       rows.push(`<tr><td colspan="4" class="hog-cat">${U.esc(cat)} · ${U.bytes(total)}</td></tr>`);
       for (const x of items) {
-        const size = x.pending ? '<span class="faint">measuring…</span>' : x.unreadable ? '<span class="tag warn" data-tip="This folder needs administrator rights to measure.">needs admin</span>' : U.bytes(x.bytes);
+        const size = x.pending ? '<span class="faint">measuring…</span>' : x.unreadable ? guard('locked') : U.bytes(x.bytes);
         const openPath = x.paths && x.paths[0];
         rows.push(`<tr>
           <td><div class="nm">${U.esc(x.name)}</div><div class="tip">${U.esc(x.tip || '')}</div></td>
@@ -286,7 +322,7 @@ const Storage = (() => {
     }
     if (s.denied) {
       const admin = App.snap && App.snap.admin;
-      parts.push(`${U.num(s.denied)} folder${s.denied === 1 ? '' : 's'} couldn't be read${admin ? '' : ' — <button class="link" data-elevate>run as administrator</button> to include them'}.`);
+      parts.push(`${U.num(s.denied)} locked folder${s.denied === 1 ? '' : 's'} (marked with a shield) couldn't be read${admin ? '' : ' — <button class="link" data-elevate>run as administrator</button> to include them'}.`);
     }
     if (s.cloudBytes > 0) parts.push(`${U.bytes(s.cloudBytes)} of online-only OneDrive files don't use disk space and aren't counted.`);
     if (/^[a-z]:\\$/i.test(s.root)) parts.push('Sizes inside Windows\\WinSxS count hard-linked files more than once, so that folder looks bigger than it really is.');
@@ -310,7 +346,7 @@ const Storage = (() => {
       .map((it) => {
         const share = L.size ? it.size / L.size : 0;
         const nameCell = `<div style="display:flex;align-items:center;gap:8px;min-width:0">${it.dir ? FOLDER : FILE}<span class="nm" style="overflow:hidden;text-overflow:ellipsis">${U.esc(it.name)}</span>${
-          it.denied ? '<span class="tag warn" data-tip="Couldn\'t read this folder. Run as administrator to include it.">no access</span>' : ''
+          it.dir ? guard(it.access || (it.denied ? 'locked' : null)) : ''
         }</div>`;
         const info = it.dir ? `${U.num(it.files)} files` : it.aggregate ? `${U.num(it.files)} files` : it.mtime ? U.day(it.mtime) : '';
         const action = it.dir ? `<button class="btn sm" data-open="${U.esc(it.path)}">Open</button>` : it.aggregate ? '' : `<button class="btn sm" data-show="${U.esc(it.path)}">Show</button>`;
@@ -326,6 +362,7 @@ const Storage = (() => {
       ${summaryNotice()}
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
         <div class="crumbs" style="margin:0">${crumbs}</div>
+        ${guard(L.access, true)}
         <span class="faint">${U.bytes(L.size)} · ${U.num(L.files)} files</span>
         <span style="margin-left:auto;display:flex;gap:8px">
           <button class="btn sm" data-open="${U.esc(L.path)}">Open in Explorer</button>
@@ -333,8 +370,9 @@ const Storage = (() => {
           <button class="btn sm" data-pickscan>Scan another folder…</button></span>
       </div>
       <div class="card" style="padding:10px;margin-bottom:14px"><div class="treemap" id="sg-tm"></div></div>
+      ${guardLegend(L.items)}
       <div class="card" style="padding:4px 8px">
-        <table class="list-table"><thead><tr><th>Name</th><th class="r">Size</th><th>Share of this folder</th><th class="r">Files / modified</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+        <table class="list-table"><thead><tr><th>Name</th><th class="r" style="width:96px">Size</th><th style="width:22%">Share of this folder</th><th class="r" style="width:120px">Files / modified</th><th style="width:80px"></th></tr></thead><tbody>${rows}</tbody></table>
         ${L.more ? `<div class="faint" style="padding:10px">…and ${U.num(L.more)} smaller items</div>` : ''}
       </div>`;
     requestAnimationFrame(() => {

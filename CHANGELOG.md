@@ -3,6 +3,18 @@
 Every SysLens release and what changed in it. SysLens shows the newest entry once after it
 updates (Settings › About › What’s new shows it again).
 
+## [1.4.2] - 2026-11-19 (Beta)
+
+A small update. **It brings its own Node.js, so there's nothing else to install.**
+
+### Added
+
+- **Shields show which folders are protected.** In Storage, every folder carries its protection: an amber **Locked** shield when only administrators can open it (SysLens can't measure inside), a blue **Protected** shield when you can look inside but only administrators can add, change or delete things (Windows, Program Files and the like), and no shield when it's yours to change. Hover a shield for what it means; the folder you're in shows its own mark, and a line above the list counts each kind. SysLens finds this out by asking Windows to open each folder, without writing anything.
+
+### Fixed
+
+- Long folder names in Storage were cut short even with room to spare.
+
 ## [1.4.1] - 2026-11-19 (Beta)
 
 **It brings its own Node.js, so there's nothing else to install.** Download **SysLens Beta 1.4.1** from the Releases page.

@@ -25,6 +25,7 @@ const api = {
   // kernel32: processes
   OpenProcess: kernel32.func('intptr_t __stdcall OpenProcess(uint32 access, int inherit, uint32 pid)'),
   CloseHandle: kernel32.func('int __stdcall CloseHandle(intptr_t h)'),
+  CreateFileW: kernel32.func('intptr_t __stdcall CreateFileW(const char16_t *name, uint32 access, uint32 share, void *sa, uint32 disposition, uint32 flags, intptr_t template)'),
   QueryFullProcessImageNameW: kernel32.func('int __stdcall QueryFullProcessImageNameW(intptr_t h, uint32 flags, void *buf, _Inout_ uint32 *size)'),
   TerminateProcess: kernel32.func('int __stdcall TerminateProcess(intptr_t h, uint32 code)'),
   GetPriorityClass: kernel32.func('uint32 __stdcall GetPriorityClass(intptr_t h)'),
@@ -259,6 +260,31 @@ function installedMemory() {
   const kb = [0];
   if (!api.GetPhysicallyInstalledSystemMemory(kb)) return 0;
   return Number(kb[0]) * 1024;
+}
+
+/**
+ * How protected a folder is for this account:
+ *   'locked'    only administrators can open it (or not even them)
+ *   'protected' it opens, but only administrators can add or change what's in it
+ *   'open'      yours to change
+ * Asks Windows to open the folder for listing, then for adding a file, and closes each handle
+ * straight away: nothing is written. null when it can't be told (gone, in use, not a folder).
+ */
+function folderAccess(dir) {
+  const tryOpen = (access) => {
+    // FILE_FLAG_BACKUP_SEMANTICS is what lets CreateFile open a folder. It bypasses permissions
+    // only for a process that has turned on its backup privilege, which SysLens never does.
+    const h = api.CreateFileW(dir, access, 7 /* share read, write, delete */, null, 3 /* OPEN_EXISTING */, 0x02000000, 0);
+    if (Number(h) === -1) return api.GetLastError();
+    api.CloseHandle(h);
+    return 0;
+  };
+  const list = tryOpen(0x0001 /* FILE_LIST_DIRECTORY */);
+  if (list === 5 /* ERROR_ACCESS_DENIED */) return 'locked';
+  if (list !== 0) return null;
+  const add = tryOpen(0x0002 /* FILE_ADD_FILE */);
+  if (add === 5) return 'protected';
+  return add === 0 ? 'open' : null;
 }
 
 function recycleBin() {
@@ -668,6 +694,7 @@ module.exports = {
   performanceInfo,
   installedMemory,
   recycleBin,
+  folderAccess,
   visibleWindows,
   isAdmin,
   processToken,

@@ -3,6 +3,19 @@
 Every SysLens release and what changed in it. SysLens shows the newest entry once after it
 updates (Settings › About › What’s new shows it again).
 
+## [1.4.3] - 2026-11-19 (Beta)
+
+A small update. **It brings its own Node.js, so there's nothing else to install.**
+
+### Added
+
+- **Back to normal mode.** When SysLens runs as administrator, a button under **Running as administrator** (also in that popup and in Ctrl+K search) opens SysLens in a normal window again and closes the administrator one. Your settings carry over.
+
+### Fixed
+
+- **Closing SysLens and quickly opening it again** brought the same copy back, because it was still shutting down. An administrator copy came back as administrator, on whatever version it started with. Now a copy whose window was just closed steps aside and a fresh SysLens starts.
+- **Updates take effect when you reopen SysLens.** Opening a newer SysLens while an older one runs used to just show the old one's window; now the old one steps aside for the new version.
+
 ## [1.4.2] - 2026-11-19 (Beta)
 
 A small update. **It brings its own Node.js, so there's nothing else to install.**

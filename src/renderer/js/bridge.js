@@ -343,6 +343,7 @@
     search: (text) => invoke('shell:search', text),
     info: () => invoke('app:info'),
     elevate: () => invoke('app:elevate'),
+    deElevate: () => invoke('app:deElevate'),
     settings: {
       get: () => invoke('settings:get'),
       set: (patch) => invoke('settings:set', patch),

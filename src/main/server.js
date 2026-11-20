@@ -265,9 +265,10 @@ function tagWindows() {
     const seen = tagged.get(win.hwnd);
     if (seen && now - seen < 30000) continue;
     try {
+      // A window this copy can't change (an administrator window, seen from a normal copy) is
+      // left alone rather than retried every tick; its own copy tags it.
       if (appid.windowAppId(win.hwnd) !== appid.APP_ID && !appid.tagWindow(win.hwnd, { appDir: APP_DIR, nodeExe: process.execPath })) {
-        logOften('tag', 'could not give the window SysLens’s taskbar identity');
-        continue;
+        logOften('tag', 'could not give a window SysLens\'s taskbar identity (it belongs to another copy)');
       }
       tagged.set(win.hwnd, now);
     } catch (err) {
@@ -282,7 +283,7 @@ function tagShortcuts() {
   for (const lnk of appid.ownShortcuts(APP_DIR)) {
     try {
       const r = appid.tagShortcut(lnk);
-      if (r === 'set') log(`gave ${path.basename(path.dirname(lnk))}\\${path.basename(lnk)} SysLens’s taskbar identity`);
+      if (r === 'set') log(`gave ${path.basename(path.dirname(lnk))}\\${path.basename(lnk)} SysLens's taskbar identity`);
       else if (r !== 'already') log(`could not update ${lnk}: ${r}`);
     } catch (err) {
       log(`could not update ${lnk}:`, err);
@@ -370,6 +371,26 @@ function placeSoon() {
     return;
   }
   setTimeout(placeSoon, 250);
+}
+
+/** The window said goodbye, nothing came back, and its browser is gone (or it's been a while). */
+function windowClosed() {
+  return windowMode === 'app' && !!byeAt && !clients.size && (!appWindowRunning() || Date.now() - byeAt > 3000);
+}
+
+/** Close this copy's windows and quit, so another SysLens can take over. */
+function stepAside(why) {
+  if (steppingAside || shuttingDown) return;
+  steppingAside = true;
+  // Stop answering as the running SysLens straight away: the one taking over looks for it.
+  try {
+    const info = readInstance();
+    if (info && info.pid === process.pid) fs.unlinkSync(INSTANCE_FILE);
+  } catch {
+    /* no instance file */
+  }
+  for (const win of ownWindows()) w.closeWindow(win.hwnd);
+  setTimeout(() => shutdown(why), 300);
 }
 
 /** Bring the window forward, or open one if it was closed. */
@@ -645,6 +666,7 @@ function buildHandlers() {
     'app:openData': () => shellx.openFolder(DATA_DIR),
     'app:changelog': () => readChangelog(),
     'app:elevate': () => elevate(),
+    'app:deElevate': () => deElevate(),
     'app:hotkey': async (combo) => {
       if (typeof combo !== 'string') return { ok: false, error: 'Not a shortcut' };
       const before = settings.get('hotkey');
@@ -838,6 +860,17 @@ async function onRequest(req, res) {
   // Opening SysLens again only brings its window forward, so it needs no token (the
   // administrator instance never writes its token to disk). Web pages can't send the header.
   if (p === '/api/focus' && req.method === 'POST' && req.headers['x-syslens-focus'] === '1') {
+    // Opening SysLens again brings this window forward, except when this copy's window was just
+    // closed, or the SysLens being opened is another version (it was updated): then this copy
+    // steps aside and the launcher starts a fresh one. Reopening never revives a closing copy,
+    // an old version, or an administrator copy whose window you closed.
+    const opening = String(req.headers['x-syslens-version'] || '').slice(0, 32);
+    const why = opening && opening !== pkg.version ? `SysLens ${opening} is starting` : windowClosed() ? 'opened again after its window was closed' : '';
+    if (why) {
+      send(res, 200, JSON.stringify({ app: 'syslens', ok: false, steppingAside: true }));
+      stepAside(why);
+      return;
+    }
     return send(res, 200, JSON.stringify({ app: 'syslens', ...showWindow() }));
   }
   if (p === '/api/background' && req.method === 'GET') return serveBackground(url, res);
@@ -948,6 +981,35 @@ function elevate() {
       resolve({ ok: true });
     });
   });
+}
+
+/**
+ * Back to normal mode from administrator mode. Anything an elevated program starts is elevated
+ * too, so the normal copy is opened by Explorer, the desktop shell, which runs without
+ * administrator rights: it opens SysLens's own shortcut (or SysLens.cmd if there's none). This
+ * copy first stops answering as the running SysLens, so the new one starts fresh instead of
+ * finding this one; once the normal window is up, this one closes.
+ */
+function deElevate() {
+  if (!monitor.admin) return { ok: true, already: true };
+  const target = appid.ownShortcuts(APP_DIR)[0] || path.join(APP_DIR, 'SysLens.cmd');
+  if (!fs.existsSync(target)) return { ok: false, error: 'There’s no SysLens shortcut to open it with. Close this window and open SysLens from the Start menu.' };
+  try {
+    const info = readInstance();
+    if (info && info.pid === process.pid) fs.unlinkSync(INSTANCE_FILE);
+  } catch {
+    /* no instance file */
+  }
+  steppingAside = true;
+  const explorer = path.join(process.env.SystemRoot || 'C:\\Windows', 'explorer.exe');
+  execFile(explorer, [target], { windowsHide: true }, () => {}); // Explorer's exit code means nothing here
+  broadcast('handoff', { normal: true });
+  log('going back to normal mode');
+  setTimeout(() => {
+    for (const win of ownWindows()) w.closeWindow(win.hwnd);
+    setTimeout(() => shutdown('back to normal mode'), 1500);
+  }, 4000); // let the normal window appear first
+  return { ok: true };
 }
 
 async function stepAsideForAdmin() {

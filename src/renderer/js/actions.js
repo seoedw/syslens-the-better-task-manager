@@ -519,9 +519,17 @@ const Actions = (() => {
       wide: true,
       body: `<p class="muted" style="margin:0 0 10px">SysLens has administrator rights in this window, so you can now:</p>
         ${adminList()}
-        <p class="faint" style="margin:12px 0 0">To go back to a normal window, close this one and open SysLens again from its shortcut.</p>
-        <div class="actions"><button class="btn primary" data-modal-close>Got it</button></div>`,
+        <p class="faint" style="margin:12px 0 0">Back to normal mode opens SysLens in a normal window again, without administrator rights, and closes this one. Your settings carry over.</p>
+        <div class="actions"><button class="btn primary" data-modal-close>Got it</button><button class="btn" id="ad-normal">Back to normal mode</button></div>`,
     });
+    const back = document.getElementById('ad-normal');
+    if (back) {
+      back.addEventListener('click', () => {
+        const x = back.closest('.modal') && back.closest('.modal').querySelector('[data-modal-close]');
+        if (x) x.click();
+        App.deElevate();
+      });
+    }
   }
 
   // ---------- help and what's new ----------

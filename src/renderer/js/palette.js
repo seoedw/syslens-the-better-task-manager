@@ -65,6 +65,7 @@ const Palette = (() => {
       ['Open the Services console', 'services.msc mmc', () => syslens.openSettings('services')],
     ];
     if (!s.admin) list.push(['Run as administrator', 'elevate admin uac', () => App.elevate()]);
+    else list.push(['Back to normal mode', 'leave administrator admin normal unelevated de-elevate', () => App.deElevate()]);
     return list.map(([name, words, run]) => ({ kind: 'Actions', glyph: 'action', name, words, run }));
   }
 

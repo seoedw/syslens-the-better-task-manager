@@ -39,6 +39,7 @@ const App = (() => {
     setPrivacy,
     setHideNetwork,
     elevate,
+    deElevate: () => deElevate(),
     saveSettings,
     refreshSoon,
     visibleOrder,
@@ -425,7 +426,7 @@ const App = (() => {
     if (adminShown === admin) return;
     adminShown = admin;
     U.$('#admin').innerHTML = admin
-      ? '<button class="badge-admin" id="btnAdminInfo" data-tip="See what administrator mode lets you do">● Running as administrator</button>'
+      ? '<button class="badge-admin" id="btnAdminInfo" data-tip="See what administrator mode lets you do">● Running as administrator</button><button class="btn sm" id="btnDeElevate" style="width:100%;margin-top:6px" data-tip="Open SysLens in a normal window again, without administrator rights">Back to normal mode</button>'
       : '<button class="btn sm" id="btnElevate" style="width:100%" data-tip="Some details, and changing services and other users’ processes, need administrator rights.">Run as administrator</button>';
   }
 
@@ -437,6 +438,13 @@ const App = (() => {
     else U.toast((r && r.error) || 'Could not restart as administrator.', 'warn');
   }
 
+  /** Leave administrator mode: a normal SysLens window opens and this one closes. */
+  async function deElevate() {
+    if (!(api.snap && api.snap.admin)) return U.toast('SysLens is already running in normal mode.', 'info');
+    const r = await syslens.deElevate().catch(() => null);
+    if (!(r && r.ok)) U.toast((r && r.error) || 'Couldn’t go back to normal mode. Close this window and open SysLens again.', 'warn', 9000);
+  }
+
   // ---------- connection banner ----------
   // Appears when the live connection drops and counts down to the next retry (bridge.js retries
   // every few seconds on its own). After 20 s it also says what to do if SysLens was closed.
@@ -445,7 +453,8 @@ const App = (() => {
   let showTimer = null;
   let tickTimer = null;
   let linkLost = false; // the server doesn't accept this window's token any more
-  let handingOff = false; // the administrator window is taking over
+  let handingOff = false; // another window (administrator or normal) is taking over
+  let handoffTo = 'admin';
 
   const setText = (el, s) => {
     if (el.textContent !== s) el.textContent = s; // unchanged text isn't announced again
@@ -462,7 +471,7 @@ const App = (() => {
     } else {
       const secs = retryAt ? Math.max(1, Math.ceil((retryAt - Date.now()) / 1000)) : 0;
       const long = Date.now() - offlineSince > 20000;
-      head = handingOff ? 'SysLens moved to the administrator window.' : long ? 'SysLens isn’t responding.' : 'Connection lost.';
+      head = handingOff ? (handoffTo === 'normal' ? 'SysLens moved to a normal window.' : 'SysLens moved to the administrator window.') : long ? 'SysLens isn’t responding.' : 'Connection lost.';
       countdown = handingOff ? '' : secs ? `Retrying in ${secs}s…` : 'Reconnecting…';
       setText(hint, 'If SysLens was closed, open it again from the desktop or Start menu.');
       hint.hidden = !long || handingOff;
@@ -706,6 +715,7 @@ const App = (() => {
       if (g) go(g.dataset.go, g.dataset.sort ? { sort: g.dataset.sort } : g.dataset.group ? { group: g.dataset.group } : g.dataset.section ? { section: g.dataset.section } : {});
       if (e.target.closest('#btnElevate')) elevate();
       if (e.target.closest('#btnAdminInfo')) Actions.adminInfo();
+      if (e.target.closest('#btnDeElevate')) deElevate();
       if (e.target.closest('#feedback')) copyFeedback();
     });
     U.$('#speed').addEventListener('click', (e) => {
@@ -732,7 +742,9 @@ const App = (() => {
         return;
       }
       handingOff = true;
-      U.toast('SysLens is now running as administrator in a new window. This one closes in a moment.', 'info', 8000);
+      handoffTo = m && m.normal ? 'normal' : 'admin';
+      if (m && m.normal) U.toast('Opening SysLens in normal mode in a new window. This one closes in a moment.', 'info', 8000);
+      else U.toast('SysLens is now running as administrator in a new window. This one closes in a moment.', 'info', 8000);
     });
     document.addEventListener('visibilitychange', () => {
       syslens.setVisible(!document.hidden).catch(() => {});
